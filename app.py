@@ -1,5 +1,6 @@
 import streamlit as st
 import xmlrpc.client
+import base64
 from datetime import date
 
 # Configuración básica de la página
@@ -78,11 +79,17 @@ st.markdown("---")
 st.subheader("Detalles del Trabajo")
 
 persona_deja_trabajo = st.text_input("Nombre de la persona que trae el trabajo (Chofer/Cadete/Dueño)")
-
-# Este campo ahora creará una SECCIÓN en la orden
 trabajo = st.text_input("Trabajo a realizar (Ej: Corte EDM, matricería, etc.)")
-
 fecha_entrega = st.date_input("Fecha estimada de entrega", value=date.today())
+
+st.markdown("---")
+st.subheader("Fotografía del Trabajo")
+# Este campo permite usar la cámara o elegir archivo. Acepta JPG y PNG.
+foto_adjunta = st.file_uploader("Subir foto de las piezas (Opcional)", type=['jpg', 'jpeg', 'png'])
+
+# Si el usuario sube una foto, mostramos una pequeña vista previa
+if foto_adjunta is not None:
+    st.image(foto_adjunta, caption="Vista previa de la imagen", use_column_width=True)
 
 st.markdown("---") 
 
@@ -104,7 +111,7 @@ if st.button("Generar Orden en Odoo", type="primary"):
                 uid = common.authenticate(DB, USER, PASSWORD, {})
                 models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
                 
-                # 1. Crear o Buscar el ID del cliente
+                # 1. Crear o Buscar Cliente
                 if es_cliente_nuevo:
                     datos_nuevo = {'name': cliente_final, 'is_company': True}
                     if telefono_final:
@@ -120,7 +127,7 @@ if st.button("Generar Orden en Odoo", type="primary"):
                      st.error("❌ Error interno: No se pudo verificar el cliente en Odoo.")
                      st.stop()
                      
-                # 2. Armar las Observaciones Generales (Footer de la orden)
+                # 2. Armar Observaciones
                 observaciones = f"--- DETALLES DE RECEPCIÓN ---\n"
                 observaciones += f"Recepcionado por: {empleado}\n"
                 if persona_deja_trabajo:
@@ -128,7 +135,7 @@ if st.button("Generar Orden en Odoo", type="primary"):
                 else:
                     observaciones += f"Persona que dejó las piezas: (No especificado)\n"
                 
-                # 3. CREAR LA ORDEN DE VENTA (Cabecera)
+                # 3. CREAR ORDEN DE VENTA
                 fecha_str = fecha_entrega.strftime("%Y-%m-%d")
                 
                 orden_id = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'create', [{
@@ -137,21 +144,38 @@ if st.button("Generar Orden en Odoo", type="primary"):
                     'note': observaciones
                 }])
                 
-                # 4. CREAR LA LÍNEA DE SECCIÓN
-                # Cambiamos 'line_note' por 'line_section'
+                # 4. CREAR SECCIÓN
                 linea_seccion = {
                     'order_id': orden_id,
                     'display_type': 'line_section', 
                     'name': trabajo              
                 }
-                
                 models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [linea_seccion])
                 
-                # 5. Leer el número generado
+                # 5. SUBIR FOTO ADJUNTA (NUEVO)
+                # Si el usuario seleccionó una foto, la procesamos y la guardamos en Odoo
+                if foto_adjunta is not None:
+                    # Leemos el archivo en binario
+                    foto_bytes = foto_adjunta.read()
+                    # Odoo requiere que los archivos estén codificados en Base64
+                    foto_base64 = base64.b64encode(foto_bytes).decode('utf-8')
+                    
+                    # Creamos el registro en el modelo 'ir.attachment' (Archivos adjuntos de Odoo)
+                    # y lo vinculamos específicamente a la orden recién creada (res_id)
+                    adjunto_data = {
+                        'name': f"Foto_Recepcion_{trabajo}.jpg",
+                        'type': 'binary',
+                        'datas': foto_base64,
+                        'res_model': 'sale.order', # Indicamos que el archivo pertenece a una orden de venta
+                        'res_id': orden_id         # Indicamos a qué orden de venta exacta pertenece
+                    }
+                    models.execute_kw(DB, uid, PASSWORD, 'ir.attachment', 'create', [adjunto_data])
+
+                # 6. ÉXITO FINAL
                 orden = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'read', 
                     [[orden_id]], {'fields': ['name']})
-                
                 num_orden = orden[0]['name']
+                
                 st.success(f"✅ ¡Éxito! Se generó la orden **{num_orden}** para {cliente_final}")
                 
                 if es_cliente_nuevo:
