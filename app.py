@@ -4,10 +4,73 @@ import base64
 from datetime import date
 
 # Configuración básica de la página
-st.set_page_config(page_title="Carga de Órdenes", page_icon="⚙️")
+st.set_page_config(
+    page_title="Recepción de Trabajos", 
+    page_icon="🔧", 
+    layout="centered",
+    initial_sidebar_state="collapsed"
+)
 
-st.title("Generador de Órdenes - Odoo")
-st.write("Complete los datos para registrar la orden de venta en el sistema.")
+# --- ESTILOS CSS PERSONALIZADOS ---
+st.markdown("""
+<style>
+    /* Ocultar el menú de Streamlit arriba a la derecha y el footer */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    
+    /* Cambiar el color de fondo principal de la aplicación (opcional, gris muy claro) */
+    .stApp {
+        background-color: #f8f9fa;
+    }
+    
+    /* Estilizar el botón principal (Fondo violeta, texto blanco, bordes redondeados) */
+    div.stButton > button:first-child {
+        background-color: #6a1b9a; /* Violeta */
+        color: white;
+        border-radius: 10px;
+        border: none;
+        padding: 10px 24px;
+        font-size: 18px;
+        font-weight: bold;
+        width: 100%; /* Botón ancho para pantallas táctiles */
+        box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1);
+        transition: 0.3s;
+    }
+    
+    /* Efecto al pasar el mouse por encima del botón */
+    div.stButton > button:first-child:hover {
+        background-color: #8e24aa; /* Violeta más claro */
+        box-shadow: 0px 6px 8px rgba(0, 0, 0, 0.2);
+    }
+    
+    /* Estilo para las cajas de entrada de texto (sombra sutil) */
+    .stTextInput > div > div > input, .stSelectbox > div > div > select {
+        border-radius: 5px;
+        border: 1px solid #ced4da;
+        box-shadow: inset 0 1px 2px rgba(0,0,0,0.075);
+    }
+    
+    /* Titulo principal de la app */
+    h1 {
+        color: #333333;
+        text-align: center;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+    
+    /* Subtitulos */
+    h3 {
+        color: #6a1b9a; /* Violeta */
+        border-bottom: 2px solid #e9ecef;
+        padding-bottom: 5px;
+        margin-top: 20px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# --- ENCABEZADO ---
+st.title("🔧 Recepción de Trabajos")
+st.markdown("<p style='text-align: center; color: #666; margin-bottom: 30px;'>Carga rápida de órdenes para Odoo</p>", unsafe_allow_html=True)
 
 # --- LIMPIEZA AUTOMÁTICA DE URL ---
 URL_CRUDA = st.secrets["ODOO_URL"]
@@ -31,7 +94,7 @@ def obtener_clientes():
         
         return [c['name'] for c in clientes_data if c['name']]
     except Exception as e:
-        st.error(f"Error al conectar con Odoo (Clientes): {e}")
+        st.error(f"Error de conexión (Clientes): {e}")
         return []
 
 @st.cache_data(ttl=300)
@@ -45,12 +108,11 @@ def obtener_empleados():
             [], {'fields': ['name'], 'order': 'name asc'})
         
         return [e['name'] for e in empleados_data if e['name']]
-    except Exception as e:
-        st.warning("No se pudo cargar la base de empleados de Odoo. Mostrando lista manual.")
+    except Exception:
         return ["Nahuel de Titto", "Taller 1", "Ventas"]
 
 # Cargamos las listas
-with st.spinner("Cargando bases de datos de Odoo..."):
+with st.spinner("Sincronizando con Odoo..."):
     lista_clientes = obtener_clientes()
     lista_empleados = obtener_empleados()
 
@@ -58,53 +120,56 @@ opciones_clientes = ["Seleccionar...", "➕ CREAR NUEVO CLIENTE"] + lista_client
 opciones_empleados = ["Seleccionar..."] + lista_empleados
 
 # --- INTERFAZ VISUAL ---
-st.subheader("Datos de la Orden")
-empleado = st.selectbox("Empleado que carga la orden", opciones_empleados)
+st.subheader("1. Datos Comerciales")
+empleado = st.selectbox("Recepcionista (Empleado interno)", opciones_empleados)
 
-cliente_seleccionado = st.selectbox("Buscar Empresa/Cliente Facturación", opciones_clientes)
+cliente_seleccionado = st.selectbox("Empresa / Cliente a facturar", opciones_clientes)
 
 cliente_final = ""
 telefono_final = ""
 es_cliente_nuevo = False
 
 if cliente_seleccionado == "➕ CREAR NUEVO CLIENTE":
-    st.info("Complete los datos del nuevo cliente:")
-    cliente_final = st.text_input("Nombre de la Empresa o Cliente")
-    telefono_final = st.text_input("Teléfono de la empresa (Opcional)")
-    es_cliente_nuevo = True
+    with st.container(border=True): # Agrega un recuadro alrededor de la creación de cliente
+        st.markdown("**Nuevo Registro Comercial**")
+        cliente_final = st.text_input("Razón Social o Nombre Completo")
+        telefono_final = st.text_input("Teléfono de Contacto (Opcional)")
+        es_cliente_nuevo = True
 else:
     cliente_final = cliente_seleccionado
 
-st.markdown("---")
-st.subheader("Detalles del Trabajo")
 
-persona_deja_trabajo = st.text_input("Nombre de la persona que trae el trabajo (Chofer/Cadete/Dueño)")
-trabajo = st.text_input("Trabajo a realizar (Ej: Corte EDM, matricería, etc.)")
-fecha_entrega = st.date_input("Fecha estimada de entrega", value=date.today())
+st.subheader("2. Especificaciones Técnicas")
 
-st.markdown("---")
-st.subheader("Fotografía del Trabajo")
-foto_adjunta = st.file_uploader("Subir foto de las piezas (Opcional)", type=['jpg', 'jpeg', 'png'])
+# Agrupamos campos relacionados en columnas para ahorrar espacio en la pantalla
+col1, col2 = st.columns(2)
+with col1:
+    persona_deja_trabajo = st.text_input("Entregado por (Chofer/Cadete)")
+with col2:
+    fecha_entrega = st.date_input("Fecha Prometida", value=date.today())
 
-# CORRECCIÓN AQUÍ: use_container_width=True en lugar de use_column_width
+trabajo = st.text_input("Descripción del Trabajo (Ej: Torneado de piezas, Corte EDM)")
+
+foto_adjunta = st.file_uploader("Evidencia fotográfica (Estado de ingreso)", type=['jpg', 'jpeg', 'png'])
+
 if foto_adjunta is not None:
-    st.image(foto_adjunta, caption="Vista previa de la imagen", use_container_width=True)
+    st.image(foto_adjunta, caption="Archivo listo para adjuntar", use_container_width=True)
 
-st.markdown("---") 
+st.markdown("<br>", unsafe_allow_html=True) # Espacio en blanco antes del botón
 
 # --- BOTÓN DE ENVIAR ---
-if st.button("Generar Orden en Odoo", type="primary"):
+if st.button("Enviar Orden al Taller", type="primary"):
     
     if empleado == "Seleccionar...":
-        st.warning("⚠️ Seleccione su nombre de empleado.")
+        st.error("⚠️ Faltan datos: Indique quién está recibiendo el trabajo.")
     elif cliente_seleccionado == "Seleccionar...":
-        st.warning("⚠️ Seleccione un cliente de la lista.")
+        st.error("⚠️ Faltan datos: Seleccione o cree un cliente.")
     elif es_cliente_nuevo and not cliente_final:
-        st.warning("⚠️ Escriba el nombre del nuevo cliente.")
+        st.error("⚠️ Faltan datos: El nombre del nuevo cliente no puede estar vacío.")
     elif not trabajo:
-        st.warning("⚠️ Escriba en qué consiste el trabajo.")
+        st.error("⚠️ Faltan datos: Describa brevemente el trabajo a realizar.")
     else:
-        with st.spinner("Conectando con el sistema y creando orden..."):
+        with st.spinner("Procesando y conectando con Odoo..."):
             try:
                 common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
                 uid = common.authenticate(DB, USER, PASSWORD, {})
@@ -123,16 +188,13 @@ if st.button("Generar Orden en Odoo", type="primary"):
                     cliente_id_odoo = cliente_busqueda[0] if cliente_busqueda else False
                     
                 if not cliente_id_odoo:
-                     st.error("❌ Error interno: No se pudo verificar el cliente en Odoo.")
+                     st.error("Error crítico: Imposible verificar la ficha del cliente en el ERP.")
                      st.stop()
                      
                 # 2. Armar Observaciones
-                observaciones = f"--- DETALLES DE RECEPCIÓN ---\n"
+                observaciones = f"=== INGRESO DE MATERIAL ===\n"
                 observaciones += f"Recepcionado por: {empleado}\n"
-                if persona_deja_trabajo:
-                    observaciones += f"Persona que dejó las piezas: {persona_deja_trabajo}\n"
-                else:
-                    observaciones += f"Persona que dejó las piezas: (No especificado)\n"
+                observaciones += f"Persona que entrega: {persona_deja_trabajo if persona_deja_trabajo else 'No especificado'}\n"
                 
                 # 3. CREAR ORDEN DE VENTA
                 fecha_str = fecha_entrega.strftime("%Y-%m-%d")
@@ -157,7 +219,7 @@ if st.button("Generar Orden en Odoo", type="primary"):
                     foto_base64 = base64.b64encode(foto_bytes).decode('utf-8')
                     
                     adjunto_data = {
-                        'name': f"Foto_Recepcion_{trabajo}.jpg",
+                        'name': f"Ingreso_{trabajo}.jpg",
                         'type': 'binary',
                         'datas': foto_base64,
                         'res_model': 'sale.order', 
@@ -170,10 +232,11 @@ if st.button("Generar Orden en Odoo", type="primary"):
                     [[orden_id]], {'fields': ['name']})
                 num_orden = orden[0]['name']
                 
-                st.success(f"✅ ¡Éxito! Se generó la orden **{num_orden}** para {cliente_final}")
+                st.balloons() # Animación festiva de Streamlit
+                st.success(f"📦 ¡Ingreso Registrado con Éxito! Número de Orden: **{num_orden}**")
                 
                 if es_cliente_nuevo:
                     obtener_clientes.clear()
                         
             except Exception as e:
-                st.error(f"Error al enviar la orden: {e}")
+                st.error(f"Falla de sincronización: {e}")
