@@ -84,12 +84,11 @@ fecha_entrega = st.date_input("Fecha estimada de entrega", value=date.today())
 
 st.markdown("---")
 st.subheader("Fotografía del Trabajo")
-# Este campo permite usar la cámara o elegir archivo. Acepta JPG y PNG.
 foto_adjunta = st.file_uploader("Subir foto de las piezas (Opcional)", type=['jpg', 'jpeg', 'png'])
 
-# Si el usuario sube una foto, mostramos una pequeña vista previa
+# CORRECCIÓN AQUÍ: use_container_width=True en lugar de use_column_width
 if foto_adjunta is not None:
-    st.image(foto_adjunta, caption="Vista previa de la imagen", use_column_width=True)
+    st.image(foto_adjunta, caption="Vista previa de la imagen", use_container_width=True)
 
 st.markdown("---") 
 
@@ -152,22 +151,17 @@ if st.button("Generar Orden en Odoo", type="primary"):
                 }
                 models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [linea_seccion])
                 
-                # 5. SUBIR FOTO ADJUNTA (NUEVO)
-                # Si el usuario seleccionó una foto, la procesamos y la guardamos en Odoo
+                # 5. SUBIR FOTO ADJUNTA
                 if foto_adjunta is not None:
-                    # Leemos el archivo en binario
                     foto_bytes = foto_adjunta.read()
-                    # Odoo requiere que los archivos estén codificados en Base64
                     foto_base64 = base64.b64encode(foto_bytes).decode('utf-8')
                     
-                    # Creamos el registro en el modelo 'ir.attachment' (Archivos adjuntos de Odoo)
-                    # y lo vinculamos específicamente a la orden recién creada (res_id)
                     adjunto_data = {
                         'name': f"Foto_Recepcion_{trabajo}.jpg",
                         'type': 'binary',
                         'datas': foto_base64,
-                        'res_model': 'sale.order', # Indicamos que el archivo pertenece a una orden de venta
-                        'res_id': orden_id         # Indicamos a qué orden de venta exacta pertenece
+                        'res_model': 'sale.order', 
+                        'res_id': orden_id         
                     }
                     models.execute_kw(DB, uid, PASSWORD, 'ir.attachment', 'create', [adjunto_data])
 
