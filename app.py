@@ -6,71 +6,87 @@ from datetime import date
 # Configuración básica de la página
 st.set_page_config(
     page_title="Recepción de Trabajos", 
-    page_icon="🔧", 
+    page_icon="⚡", 
     layout="centered",
     initial_sidebar_state="collapsed"
 )
 
-# --- ESTILOS CSS PERSONALIZADOS ---
+# --- ESTILOS CSS SÚPER MODERNOS ---
 st.markdown("""
 <style>
-    /* Ocultar el menú de Streamlit arriba a la derecha y el footer */
+    /* 1. Ocultar elementos de Streamlit para efecto de App Nativa */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
     
-    /* Cambiar el color de fondo principal de la aplicación (opcional, gris muy claro) */
+    /* 2. Fondo general de la aplicación (Gris azulado muy suave) */
     .stApp {
-        background-color: #f8f9fa;
+        background-color: #F4F6F9;
     }
     
-    /* Estilizar el botón principal (Fondo violeta, texto blanco, bordes redondeados) */
+    /* 3. Estilo de las "Tarjetas" (Contenedores con borde) */
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        background-color: #ffffff;
+        border: none !important;
+        border-radius: 16px !important;
+        box-shadow: 0 8px 24px rgba(149, 157, 165, 0.15) !important; /* Sombra suave elegante */
+        padding: 5px;
+        transition: transform 0.2s ease-in-out;
+    }
+
+    /* 4. Estilo moderno para Cajas de Texto y Selectores */
+    div[data-baseweb="input"] > div, div[data-baseweb="select"] > div {
+        background-color: #f8f9fa !important;
+        border-radius: 10px !important;
+        border: 1px solid #e2e8f0 !important;
+        transition: all 0.3s ease;
+    }
+    
+    /* Efecto "Glow" (Brillo) violeta al tocar una caja para escribir */
+    div[data-baseweb="input"] > div:focus-within, div[data-baseweb="select"] > div:focus-within {
+        border-color: #8e24aa !important;
+        box-shadow: 0 0 0 2px rgba(142, 36, 170, 0.2) !important;
+        background-color: #ffffff !important;
+    }
+
+    /* 5. Botón principal: Degradado moderno y animación 3D flotante */
     div.stButton > button:first-child {
-        background-color: #6a1b9a; /* Violeta */
+        background: linear-gradient(135deg, #6a1b9a 0%, #ab47bc 100%); /* Degradado violeta */
         color: white;
-        border-radius: 10px;
+        border-radius: 12px;
         border: none;
-        padding: 10px 24px;
+        padding: 12px 24px;
         font-size: 18px;
-        font-weight: bold;
-        width: 100%; /* Botón ancho para pantallas táctiles */
-        box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1);
-        transition: 0.3s;
+        font-weight: 600;
+        width: 100%;
+        box-shadow: 0 8px 16px rgba(106, 27, 154, 0.25);
+        transition: all 0.3s ease;
     }
     
-    /* Efecto al pasar el mouse por encima del botón */
+    /* Al pasar el mouse / dedo por el botón (se levanta) */
     div.stButton > button:first-child:hover {
-        background-color: #8e24aa; /* Violeta más claro */
-        box-shadow: 0px 6px 8px rgba(0, 0, 0, 0.2);
+        transform: translateY(-3px);
+        box-shadow: 0 12px 20px rgba(106, 27, 154, 0.4);
     }
     
-    /* Estilo para las cajas de entrada de texto (sombra sutil) */
-    .stTextInput > div > div > input, .stSelectbox > div > div > select {
-        border-radius: 5px;
-        border: 1px solid #ced4da;
-        box-shadow: inset 0 1px 2px rgba(0,0,0,0.075);
+    /* Al hacer click (se hunde) */
+    div.stButton > button:first-child:active {
+        transform: translateY(1px);
+        box-shadow: 0 4px 8px rgba(106, 27, 154, 0.2);
     }
-    
-    /* Titulo principal de la app */
-    h1 {
-        color: #333333;
-        text-align: center;
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    }
-    
-    /* Subtitulos */
-    h3 {
-        color: #6a1b9a; /* Violeta */
-        border-bottom: 2px solid #e9ecef;
-        padding-bottom: 5px;
-        margin-top: 20px;
+
+    /* 6. Tipografías más limpias */
+    h1, h2, h3 {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        color: #1e293b;
+        font-weight: 700;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # --- ENCABEZADO ---
-st.title("🔧 Recepción de Trabajos")
-st.markdown("<p style='text-align: center; color: #666; margin-bottom: 30px;'>Carga rápida de órdenes para Odoo</p>", unsafe_allow_html=True)
+st.title("⚡ Recepción Taller")
+st.markdown("<p style='text-align: left; color: #64748b; margin-top: -15px; margin-bottom: 30px;'>Carga de órdenes de trabajo para Odoo</p>", unsafe_allow_html=True)
 
 # --- LIMPIEZA AUTOMÁTICA DE URL ---
 URL_CRUDA = st.secrets["ODOO_URL"]
@@ -87,14 +103,10 @@ def obtener_clientes():
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USER, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        
         clientes_data = models.execute_kw(DB, uid, PASSWORD, 'res.partner', 'search_read', 
-            [[['active', '=', True]]], 
-            {'fields': ['name'], 'order': 'name asc'})
-        
+            [[['active', '=', True]]], {'fields': ['name'], 'order': 'name asc'})
         return [c['name'] for c in clientes_data if c['name']]
-    except Exception as e:
-        st.error(f"Error de conexión (Clientes): {e}")
+    except Exception:
         return []
 
 @st.cache_data(ttl=300)
@@ -103,62 +115,58 @@ def obtener_empleados():
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USER, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        
         empleados_data = models.execute_kw(DB, uid, PASSWORD, 'hr.employee', 'search_read', 
             [], {'fields': ['name'], 'order': 'name asc'})
-        
         return [e['name'] for e in empleados_data if e['name']]
     except Exception:
         return ["Nahuel de Titto", "Taller 1", "Ventas"]
 
-# Cargamos las listas
-with st.spinner("Sincronizando con Odoo..."):
+with st.spinner("Sincronizando base de datos..."):
     lista_clientes = obtener_clientes()
     lista_empleados = obtener_empleados()
 
 opciones_clientes = ["Seleccionar...", "➕ CREAR NUEVO CLIENTE"] + lista_clientes
 opciones_empleados = ["Seleccionar..."] + lista_empleados
 
-# --- INTERFAZ VISUAL ---
-st.subheader("1. Datos Comerciales")
-empleado = st.selectbox("Recepcionista (Empleado interno)", opciones_empleados)
+# --- INTERFAZ VISUAL (AHORA CON TARJETAS BLANCAS) ---
 
-cliente_seleccionado = st.selectbox("Empresa / Cliente a facturar", opciones_clientes)
-
-cliente_final = ""
-telefono_final = ""
-es_cliente_nuevo = False
-
-if cliente_seleccionado == "➕ CREAR NUEVO CLIENTE":
-    with st.container(border=True): # Agrega un recuadro alrededor de la creación de cliente
-        st.markdown("**Nuevo Registro Comercial**")
+st.markdown("### 🏢 Datos Comerciales")
+with st.container(border=True): # ESTO CREA LA TARJETA 1
+    empleado = st.selectbox("Recepcionista (Técnico interno)", opciones_empleados)
+    cliente_seleccionado = st.selectbox("Empresa / Cliente a facturar", opciones_clientes)
+    
+    cliente_final = ""
+    telefono_final = ""
+    es_cliente_nuevo = False
+    
+    if cliente_seleccionado == "➕ CREAR NUEVO CLIENTE":
+        st.markdown("<p style='color:#8e24aa; font-weight:bold; font-size:14px;'>Nuevo Registro Comercial</p>", unsafe_allow_html=True)
         cliente_final = st.text_input("Razón Social o Nombre Completo")
         telefono_final = st.text_input("Teléfono de Contacto (Opcional)")
         es_cliente_nuevo = True
-else:
-    cliente_final = cliente_seleccionado
+    else:
+        cliente_final = cliente_seleccionado
 
+st.markdown("<br>", unsafe_allow_html=True) # Espaciador
 
-st.subheader("2. Especificaciones Técnicas")
+st.markdown("### ⚙️ Especificaciones del Trabajo")
+with st.container(border=True): # ESTO CREA LA TARJETA 2
+    col1, col2 = st.columns(2)
+    with col1:
+        persona_deja_trabajo = st.text_input("Traído por (Chofer/Dueño)")
+    with col2:
+        fecha_entrega = st.date_input("Fecha Prometida", value=date.today())
+        
+    trabajo = st.text_input("Descripción del Trabajo (Ej: Corte EDM, Fresado)")
+    foto_adjunta = st.file_uploader("Evidencia fotográfica del ingreso", type=['jpg', 'jpeg', 'png'])
+    
+    if foto_adjunta is not None:
+        st.image(foto_adjunta, caption="Archivo listo para adjuntar", use_container_width=True)
 
-# Agrupamos campos relacionados en columnas para ahorrar espacio en la pantalla
-col1, col2 = st.columns(2)
-with col1:
-    persona_deja_trabajo = st.text_input("Entregado por (Chofer/Cadete)")
-with col2:
-    fecha_entrega = st.date_input("Fecha Prometida", value=date.today())
-
-trabajo = st.text_input("Descripción del Trabajo (Ej: Torneado de piezas, Corte EDM)")
-
-foto_adjunta = st.file_uploader("Evidencia fotográfica (Estado de ingreso)", type=['jpg', 'jpeg', 'png'])
-
-if foto_adjunta is not None:
-    st.image(foto_adjunta, caption="Archivo listo para adjuntar", use_container_width=True)
-
-st.markdown("<br>", unsafe_allow_html=True) # Espacio en blanco antes del botón
+st.markdown("<br>", unsafe_allow_html=True) # Espacio antes del botón
 
 # --- BOTÓN DE ENVIAR ---
-if st.button("Enviar Orden al Taller", type="primary"):
+if st.button("🚀 Enviar Orden al Taller", type="primary"):
     
     if empleado == "Seleccionar...":
         st.error("⚠️ Faltan datos: Indique quién está recibiendo el trabajo.")
@@ -180,7 +188,6 @@ if st.button("Enviar Orden al Taller", type="primary"):
                     datos_nuevo = {'name': cliente_final, 'is_company': True}
                     if telefono_final:
                         datos_nuevo['phone'] = telefono_final
-                        
                     cliente_id_odoo = models.execute_kw(DB, uid, PASSWORD, 'res.partner', 'create', [datos_nuevo])
                 else:
                     cliente_busqueda = models.execute_kw(DB, uid, PASSWORD, 'res.partner', 'search', 
@@ -198,7 +205,6 @@ if st.button("Enviar Orden al Taller", type="primary"):
                 
                 # 3. CREAR ORDEN DE VENTA
                 fecha_str = fecha_entrega.strftime("%Y-%m-%d")
-                
                 orden_id = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'create', [{
                     'partner_id': cliente_id_odoo,
                     'commitment_date': fecha_str,
@@ -217,7 +223,6 @@ if st.button("Enviar Orden al Taller", type="primary"):
                 if foto_adjunta is not None:
                     foto_bytes = foto_adjunta.read()
                     foto_base64 = base64.b64encode(foto_bytes).decode('utf-8')
-                    
                     adjunto_data = {
                         'name': f"Ingreso_{trabajo}.jpg",
                         'type': 'binary',
@@ -232,8 +237,8 @@ if st.button("Enviar Orden al Taller", type="primary"):
                     [[orden_id]], {'fields': ['name']})
                 num_orden = orden[0]['name']
                 
-                st.balloons() # Animación festiva de Streamlit
-                st.success(f"📦 ¡Ingreso Registrado con Éxito! Número de Orden: **{num_orden}**")
+                st.balloons()
+                st.success(f"📦 ¡Ingreso Registrado con Éxito! Orden **{num_orden}** creada.")
                 
                 if es_cliente_nuevo:
                     obtener_clientes.clear()
