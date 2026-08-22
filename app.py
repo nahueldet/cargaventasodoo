@@ -8,14 +8,16 @@ st.set_page_config(page_title="Carga de Órdenes", page_icon="⚙️")
 st.title("Generador de Órdenes - Odoo")
 st.write("Complete los datos para registrar la orden de venta en el sistema.")
 
-# Las credenciales se llaman desde los "Secretos"
-URL = st.secrets["ODOO_URL"]
+# --- LIMPIEZA AUTOMÁTICA DE URL ---
+URL_CRUDA = st.secrets["ODOO_URL"]
+URL = URL_CRUDA.split('/odoo')[0].rstrip('/')
+
 DB = st.secrets["ODOO_DB"]
 USER = st.secrets["ODOO_USER"]
 PASSWORD = st.secrets["ODOO_PASSWORD"]
 
-# --- NUEVA FUNCIÓN: Obtener clientes de Odoo ---
-# El decorador cache_data guarda la lista por 5 minutos (300 segundos) para que la app no sea lenta
+# --- FUNCIONES DE CONEXIÓN CON ODOO ---
+
 @st.cache_data(ttl=300)
 def obtener_clientes():
     try:
@@ -23,56 +25,74 @@ def obtener_clientes():
         uid = common.authenticate(DB, USER, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
-        # Busca todos los contactos activos ordenados alfabéticamente
         clientes_data = models.execute_kw(DB, uid, PASSWORD, 'res.partner', 'search_read', 
             [[['active', '=', True]]], 
             {'fields': ['name'], 'order': 'name asc'})
         
-        # Extraemos solo los nombres, ignorando los que estén vacíos
-        nombres = [c['name'] for c in clientes_data if c['name']]
-        return nombres
+        return [c['name'] for c in clientes_data if c['name']]
     except Exception as e:
-        st.error(f"Error al conectar con Odoo para cargar la lista de clientes: {e}")
+        st.error(f"Error al conectar con Odoo (Clientes): {e}")
         return []
 
-# Cargamos la lista antes de mostrar la interfaz
-with st.spinner("Cargando base de datos de clientes..."):
-    lista_clientes = obtener_clientes()
+# NUEVA FUNCIÓN: Obtener la lista de empleados reales desde Odoo
+@st.cache_data(ttl=300)
+def obtener_empleados():
+    try:
+        common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
+        uid = common.authenticate(DB, USER, PASSWORD, {})
+        models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+        
+        # 'hr.employee' es la tabla de empleados en Odoo
+        empleados_data = models.execute_kw(DB, uid, PASSWORD, 'hr.employee', 'search_read', 
+            [], {'fields': ['name'], 'order': 'name asc'})
+        
+        return [e['name'] for e in empleados_data if e['name']]
+    except Exception as e:
+        # Si da error, quizás no tienen instalado el módulo de Recursos Humanos, 
+        # así que devolvemos una lista de respaldo
+        st.warning("No se pudo cargar la base de empleados de Odoo. Mostrando lista manual.")
+        return ["Nahuel de Titto", "Taller 1", "Ventas"]
 
-# Preparamos las opciones del menú desplegable (Buscador)
-opciones_desplegable = ["Seleccionar...", "➕ CREAR NUEVO CLIENTE"] + lista_clientes
+# Cargamos las listas
+with st.spinner("Cargando bases de datos de Odoo..."):
+    lista_clientes = obtener_clientes()
+    lista_empleados = obtener_empleados()
+
+opciones_clientes = ["Seleccionar...", "➕ CREAR NUEVO CLIENTE"] + lista_clientes
+opciones_empleados = ["Seleccionar..."] + lista_empleados
 
 # --- INTERFAZ VISUAL ---
 st.subheader("Datos de la Orden")
-empleado = st.selectbox("Seleccione su nombre", ["Seleccionar...", "Juan", "Pedro", "María", "Nahuel de Titto"])
+empleado = st.selectbox("Empleado que carga la orden", opciones_empleados)
 
-# El selectbox de Streamlit permite hacer clic y tipear para buscar en la lista
-cliente_seleccionado = st.selectbox("Buscar Cliente en Base de Datos", opciones_desplegable)
+cliente_seleccionado = st.selectbox("Buscar Empresa/Cliente Facturación", opciones_clientes)
 
-# Variables que usaremos para enviar a Odoo
 cliente_final = ""
 telefono_final = ""
 es_cliente_nuevo = False
 
-# LÓGICA DINÁMICA: Si elige crear nuevo, mostramos los campos extra de inmediato
 if cliente_seleccionado == "➕ CREAR NUEVO CLIENTE":
     st.info("Complete los datos del nuevo cliente:")
     cliente_final = st.text_input("Nombre de la Empresa o Cliente")
-    telefono_final = st.text_input("Teléfono (Opcional - Para avisos)")
+    telefono_final = st.text_input("Teléfono de la empresa (Opcional)")
     es_cliente_nuevo = True
 else:
-    # Si eligió un cliente existente de la lista
     cliente_final = cliente_seleccionado
 
-referencia = st.text_input("Referencia del Trabajo (Ej: Corte EDM, matricería, etc.)")
+st.markdown("---")
+st.subheader("Detalles del Trabajo")
+
+# NUEVO CAMPO: Persona física que deja el trabajo
+persona_deja_trabajo = st.text_input("Nombre de la persona que trae el trabajo (Chofer/Cadete/Dueño)")
+
+referencia = st.text_input("Referencia Corta (Ej: Corte EDM, matricería, etc.)")
 fecha_entrega = st.date_input("Fecha estimada de entrega", value=date.today())
 
 st.markdown("---") 
 
-# --- BOTÓN DE ENVIAR Y LÓGICA DE ODOO ---
+# --- BOTÓN DE ENVIAR ---
 if st.button("Generar Orden en Odoo", type="primary"):
     
-    # Validaciones para que no envíen campos vacíos
     if empleado == "Seleccionar...":
         st.warning("⚠️ Seleccione su nombre de empleado.")
     elif cliente_seleccionado == "Seleccionar...":
@@ -88,46 +108,53 @@ if st.button("Generar Orden en Odoo", type="primary"):
                 uid = common.authenticate(DB, USER, PASSWORD, {})
                 models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
                 
-                # PASO 1: Resolver el ID del cliente
+                # 1. Crear o Buscar el ID del cliente
                 if es_cliente_nuevo:
-                    # Lo creamos en Odoo
                     datos_nuevo = {'name': cliente_final, 'is_company': True}
                     if telefono_final:
                         datos_nuevo['phone'] = telefono_final
                         
                     cliente_id_odoo = models.execute_kw(DB, uid, PASSWORD, 'res.partner', 'create', [datos_nuevo])
-                    ref_completa = f"[{empleado}] - {referencia}"
-                    
                 else:
-                    # Como ya existe en la lista, buscamos su ID numérico interno en Odoo
                     cliente_busqueda = models.execute_kw(DB, uid, PASSWORD, 'res.partner', 'search', 
                         [[['name', '=', cliente_final]]], {'limit': 1})
                     cliente_id_odoo = cliente_busqueda[0] if cliente_busqueda else False
-                    ref_completa = f"[{empleado}] - {referencia}"
                     
-                # PASO 2: Crear la Orden de Venta
                 if not cliente_id_odoo:
                      st.error("❌ Error interno: No se pudo verificar el cliente en Odoo.")
+                     st.stop()
+                     
+                # 2. Armar las Observaciones y la Referencia
+                # La referencia corta irá en el campo tradicional
+                ref_corta = f"[{empleado}] - {referencia}"
+                
+                # Armamos un bloque de texto ordenado para las notas internas de la orden
+                observaciones = f"--- DETALLES DE RECEPCIÓN ---\n"
+                observaciones += f"Trabajo: {referencia}\n"
+                observaciones += f"Recepcionado por: {empleado}\n"
+                if persona_deja_trabajo:
+                    observaciones += f"Persona que dejó las piezas: {persona_deja_trabajo}\n"
                 else:
-                    fecha_str = fecha_entrega.strftime("%Y-%m-%d")
-                    orden_id = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'create', [{
-                        'partner_id': cliente_id_odoo,
-                        'client_order_ref': ref_completa,
-                        'commitment_date': fecha_str
-                    }])
-                    
-                    # Leemos qué número SO-XXX le asignó Odoo
-                    orden = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'read', 
-                        [[orden_id]], {'fields': ['name']})
-                    
-                    num_orden = orden[0]['name']
-                    st.success(f"✅ ¡Éxito! Se generó la orden de venta: **{num_orden}** para {cliente_final}")
-                    
-                    # LIMPIEZA DE CACHÉ: Si creamos un cliente nuevo, borramos la memoria
-                    # para que la próxima vez que alguien abra la app, Odoo descargue la lista 
-                    # actualizada y el nuevo cliente ya aparezca en el buscador.
-                    if es_cliente_nuevo:
-                        obtener_clientes.clear()
+                    observaciones += f"Persona que dejó las piezas: (No especificado)\n"
+                
+                # 3. Crear la Orden de Venta
+                fecha_str = fecha_entrega.strftime("%Y-%m-%d")
+                orden_id = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'create', [{
+                    'partner_id': cliente_id_odoo,
+                    'client_order_ref': ref_corta,
+                    'commitment_date': fecha_str,
+                    'note': observaciones  # Aquí guardamos todo el bloque de texto
+                }])
+                
+                # 4. Leer el número generado
+                orden = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'read', 
+                    [[orden_id]], {'fields': ['name']})
+                
+                num_orden = orden[0]['name']
+                st.success(f"✅ ¡Éxito! Se generó la orden **{num_orden}** para {cliente_final}")
+                
+                if es_cliente_nuevo:
+                    obtener_clientes.clear()
                         
             except Exception as e:
-                st.error(f"Error de conexión o de Odoo: {e}")
+                st.error(f"Error al enviar la orden: {e}")
