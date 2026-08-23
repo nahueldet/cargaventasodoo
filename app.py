@@ -113,7 +113,7 @@ opciones_empleados = ["Seleccionar..."] + lista_empleados
 tab1, tab2 = st.tabs(["📦 Ingreso de Material", "⏱️ Carga de Horas"])
 
 # ------------------------------------------
-# MÓDULO 1: INGRESO DE MATERIAL (Ya existente)
+# MÓDULO 1: INGRESO DE MATERIAL 
 # ------------------------------------------
 with tab1:
     st.markdown("### 🏢 Datos Comerciales")
@@ -194,13 +194,12 @@ with tab1:
                 except Exception as e:
                     st.error(f"Falla de sincronización: {e}")
 
-
 # ------------------------------------------
-# MÓDULO 2: CARGA DE HORAS Y NOTAS (NUEVO)
+# MÓDULO 2: CARGA DE HORAS Y NOTAS
 # ------------------------------------------
 with tab2:
     st.markdown("### 🔍 Buscar Orden")
-    busqueda = st.text_input("Ingrese Nro de Orden (Ej: S0045) o descripción del trabajo", key="input_busqueda")
+    busqueda = st.text_input("Ingrese Nro de Orden (Ej: S0045) o descripción", key="input_busqueda")
     
     if busqueda:
         with st.spinner("Buscando en el sistema..."):
@@ -209,14 +208,10 @@ with tab2:
                 uid = common.authenticate(DB, USER, PASSWORD, {})
                 models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
                 
-                # Buscamos en el nombre de la orden
                 so_ids = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search', [[['name', 'ilike', busqueda]]])
-                
-                # Buscamos en las líneas de detalle (el trabajo escrito)
                 lineas = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', [[['name', 'ilike', busqueda]]], {'fields': ['order_id']})
                 line_so_ids = [line['order_id'][0] for line in lineas if line.get('order_id')]
                 
-                # Juntamos los resultados
                 all_ids = list(set(so_ids + line_so_ids))
                 
                 if all_ids:
@@ -227,28 +222,31 @@ with tab2:
                     opciones_ord = {f"{o['name']} - Cliente: {o['partner_id'][1]}": o['id'] for o in ordenes}
                     
                     with st.container(border=True):
-                        orden_seleccionada = st.selectbox("Seleccione la orden encontrada:", list(opciones_ord.keys()))
+                        orden_seleccionada = st.selectbox("Seleccione la orden:", list(opciones_ord.keys()))
                         orden_id = opciones_ord[orden_seleccionada]
                         
-                        # Extraemos las líneas para mostrarle al técnico los trabajos a realizar
+                        # Extraemos los trabajos (líneas de sección) para que el técnico elija
                         lineas_orden = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', 
                                                          [[['order_id', '=', orden_id]]], 
                                                          {'fields': ['name', 'display_type']})
                         
-                        st.markdown("**🛠️ Trabajos pendientes en esta orden:**")
+                        # Filtramos solo las que son 'line_section' o trabajos reales 
+                        trabajos_disponibles = []
                         for linea in lineas_orden:
-                            desc = linea.get('name', '')
-                            if linea.get('display_type') == 'line_section':
-                                st.markdown(f"<span style='color:#6a1b9a; font-weight:bold;'>🔹 {desc}</span>", unsafe_allow_html=True)
-                            elif linea.get('display_type') == 'line_note':
-                                st.caption(f"  📝 {desc}")
-                            elif not linea.get('display_type'):
-                                st.write(f"  - {desc}")
+                             if linea.get('display_type') == 'line_section' or not linea.get('display_type'):
+                                 if linea.get('name'):
+                                     trabajos_disponibles.append(linea['name'])
+                        
+                        if not trabajos_disponibles:
+                            trabajos_disponibles = ["Trabajo General de la Orden"]
+                            
+                        # Aquí el técnico elige A QUÉ TRABAJO le cargará las horas
+                        trabajo_a_imputar = st.selectbox("¿A qué trabajo o pieza le cargará las horas?", trabajos_disponibles)
                                 
                     # Formulario para registrar las horas
                     st.markdown("### ⏱️ Registrar Avance")
                     with st.form("form_horas"):
-                        tec = st.selectbox("Técnico que realizó el trabajo", opciones_empleados, key="tec_horas")
+                        tec = st.selectbox("Técnico", opciones_empleados, key="tec_horas")
                         
                         colA, colB = st.columns(2)
                         with colA:
@@ -256,7 +254,7 @@ with tab2:
                         with colB:
                             horas_trabajadas = st.number_input("Horas utilizadas", min_value=0.0, step=0.25, value=1.0)
                             
-                        notas_extra = st.text_area("Notas / Observaciones de lo que se hizo (Para Administración)")
+                        notas_extra = st.text_area("Notas / Observaciones de lo que se hizo")
                         
                         submit_horas = st.form_submit_button("Guardar Registro", type="primary")
                         
@@ -266,19 +264,20 @@ with tab2:
                             elif horas_trabajadas <= 0:
                                 st.error("⚠️ Las horas deben ser mayor a 0.")
                             else:
-                                # Creamos el texto que se verá en la orden
-                                texto_registro = f"⏱️ REGISTRO: {tec} | {horas_trabajadas} hs | Fecha: {dia_trabajo.strftime('%d/%m/%Y')}"
+                                # Creamos la nota con referencia directa a la pieza seleccionada
+                                texto_registro = f"⏱️ HORAS ({tec}): {horas_trabajadas} hs | Fecha: {dia_trabajo.strftime('%d/%m/%Y')}"
+                                texto_registro += f"\n👉 Trabajo realizado en: {trabajo_a_imputar}"
                                 if notas_extra:
                                     texto_registro += f"\n📝 Notas Técnicas: {notas_extra}"
                                     
-                                # Lo guardamos como una Línea de Nota en la orden
+                                # Lo guardamos como una Línea de Nota al final de la orden
                                 models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [{
                                     'order_id': orden_id,
                                     'display_type': 'line_note', 
                                     'name': texto_registro              
                                 }])
                                 
-                                st.success("✅ ¡Horas y notas anexadas exitosamente a la orden en Odoo!")
+                                st.success("✅ ¡Horas anexadas exitosamente a la orden!")
                 else:
                     st.warning("No se encontraron órdenes ni trabajos con esa búsqueda.")
                     
