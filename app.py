@@ -2,6 +2,9 @@ import streamlit as st
 import xmlrpc.client
 import base64
 from datetime import date
+import qrcode
+from io import BytesIO
+from streamlit_qrcode_scanner import qrcode_scanner
 
 # Configuración básica de la página
 st.set_page_config(
@@ -97,7 +100,7 @@ def obtener_empleados():
         empleados_data = models.execute_kw(DB, uid, PASSWORD, 'hr.employee', 'search_read', 
             [], {'fields': ['name'], 'order': 'name asc'})
         return [e['name'] for e in empleados_data if e['name']]
-    except Exception: return ["Nahuel de Titto", "Taller 1", "Ventas"]
+    except Exception: return ["Nahuel De Titto", "Técnico 1", "Técnico 2"]
 
 with st.spinner("Sincronizando base de datos..."):
     lista_clientes = obtener_clientes()
@@ -105,7 +108,6 @@ with st.spinner("Sincronizando base de datos..."):
 
 opciones_clientes = ["Seleccionar...", "➕ CREAR NUEVO CLIENTE"] + lista_clientes
 opciones_empleados = ["Seleccionar..."] + lista_empleados
-
 
 # ==========================================
 # CREACIÓN DE PESTAÑAS (MÓDULOS)
@@ -187,8 +189,31 @@ with tab1:
                         }])
 
                     orden = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'read', [[orden_id]], {'fields': ['name']})
+                    num_orden = orden[0]['name']
+                    
                     st.balloons()
-                    st.success(f"📦 ¡Ingreso Registrado! Orden **{orden[0]['name']}** creada.")
+                    st.success(f"📦 ¡Ingreso Registrado! Orden **{num_orden}** creada.")
+                    
+                    # --- GENERAR Y MOSTRAR CÓDIGO QR ---
+                    qr = qrcode.QRCode(
+                        version=1,
+                        error_correction=qrcode.constants.ERROR_CORRECT_L,
+                        box_size=10,
+                        border=4,
+                    )
+                    qr.add_data(num_orden) # El QR solo contiene el número de orden, ej: SO0045
+                    qr.make(fit=True)
+
+                    img_qr = qr.make_image(fill_color="black", back_color="white")
+                    
+                    # Mostrar el QR en la pantalla para que puedan imprimirlo o escanearlo
+                    st.markdown("### 📷 Código QR de la Orden")
+                    st.markdown("Este código identifica el trabajo ingresado. Guarde esta imagen o imprímala para adjuntar a las piezas.")
+                    
+                    buf = BytesIO()
+                    img_qr.save(buf, format="PNG")
+                    st.image(buf, caption=f"QR Orden: {num_orden}", width=250)
+
                     if es_cliente_nuevo: obtener_clientes.clear()
                             
                 except Exception as e:
@@ -199,7 +224,15 @@ with tab1:
 # ------------------------------------------
 with tab2:
     st.markdown("### 🔍 Buscar Orden")
-    busqueda = st.text_input("Ingrese Nro de Orden (Ej: S0045) o descripción", key="input_busqueda")
+    st.markdown("Puede buscar ingresando texto, o usar la cámara para escanear el QR generado al ingreso.")
+    
+    # Opción para escanear QR usando la cámara web/celular
+    qr_code_scanned = qrcode_scanner(key='scanner')
+    
+    # Si se escaneó un código QR, el buscador se autocompleta. Si no, queda vacío para escribir.
+    texto_busqueda_inicial = qr_code_scanned if qr_code_scanned else ""
+
+    busqueda = st.text_input("Ingrese Nro de Orden (Ej: S0045) o descripción", value=texto_busqueda_inicial, key="input_busqueda")
     
     if busqueda:
         with st.spinner("Buscando en el sistema..."):
@@ -225,12 +258,10 @@ with tab2:
                         orden_seleccionada = st.selectbox("Seleccione la orden:", list(opciones_ord.keys()))
                         orden_id = opciones_ord[orden_seleccionada]
                         
-                        # Extraemos los trabajos (líneas de sección) para que el técnico elija
                         lineas_orden = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', 
                                                          [[['order_id', '=', orden_id]]], 
                                                          {'fields': ['name', 'display_type']})
                         
-                        # Filtramos solo las que son 'line_section' o trabajos reales 
                         trabajos_disponibles = []
                         for linea in lineas_orden:
                              if linea.get('display_type') == 'line_section' or not linea.get('display_type'):
@@ -240,7 +271,6 @@ with tab2:
                         if not trabajos_disponibles:
                             trabajos_disponibles = ["Trabajo General de la Orden"]
                             
-                        # Aquí el técnico elige A QUÉ TRABAJO le cargará las horas
                         trabajo_a_imputar = st.selectbox("¿A qué trabajo o pieza le cargará las horas?", trabajos_disponibles)
                                 
                     # Formulario para registrar las horas
@@ -264,13 +294,11 @@ with tab2:
                             elif horas_trabajadas <= 0:
                                 st.error("⚠️ Las horas deben ser mayor a 0.")
                             else:
-                                # Creamos la nota con referencia directa a la pieza seleccionada
                                 texto_registro = f"⏱️ HORAS ({tec}): {horas_trabajadas} hs | Fecha: {dia_trabajo.strftime('%d/%m/%Y')}"
                                 texto_registro += f"\n👉 Trabajo realizado en: {trabajo_a_imputar}"
                                 if notas_extra:
                                     texto_registro += f"\n📝 Notas Técnicas: {notas_extra}"
                                     
-                                # Lo guardamos como una Línea de Nota al final de la orden
                                 models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [{
                                     'order_id': orden_id,
                                     'display_type': 'line_note', 
@@ -280,6 +308,9 @@ with tab2:
                                 st.success("✅ ¡Horas anexadas exitosamente a la orden!")
                 else:
                     st.warning("No se encontraron órdenes ni trabajos con esa búsqueda.")
+                    
+            except Exception as e:
+                st.error(f"Error de conexión: {e}")
                     
             except Exception as e:
                 st.error(f"Error de conexión: {e}")
