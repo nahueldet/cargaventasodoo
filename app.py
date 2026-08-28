@@ -17,6 +17,11 @@ if 'num_orden_generada' not in st.session_state:
     st.session_state.num_orden_generada = ""
 if 'qr_base64' not in st.session_state:
     st.session_state.qr_base64 = ""
+if 'nombre_cliente_etiqueta' not in st.session_state:
+    st.session_state.nombre_cliente_etiqueta = ""
+if 'desc_trabajo_etiqueta' not in st.session_state:
+    st.session_state.desc_trabajo_etiqueta = ""
+
 
 # --- ESTILOS CSS SÚPER MODERNOS ---
 st.markdown("""
@@ -179,8 +184,8 @@ with tab1:
 
                         orden = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'read', [[orden_id]], {'fields': ['name']})
                         
-                        # --- GENERAR QR OPTIMIZADO PARA ETIQUETA ---
-                        qr = qrcode.QRCode(version=1, box_size=10, border=1) # Borde reducido a 1 para maximizar tamaño
+                        # --- GENERAR QR ---
+                        qr = qrcode.QRCode(version=1, box_size=10, border=1) 
                         qr.add_data(orden[0]['name'])
                         qr.make(fit=True)
                         img_qr = qr.make_image(fill_color="black", back_color="white")
@@ -191,6 +196,15 @@ with tab1:
                         
                         st.session_state.num_orden_generada = orden[0]['name']
                         st.session_state.qr_base64 = qr_base64_str
+                        
+                        # Resumir el nombre del cliente a los primeros 15 caracteres para la etiqueta
+                        cliente_resumen = (cliente_final[:15] + '...') if len(cliente_final) > 15 else cliente_final
+                        # Resumir el trabajo a los primeros 20 caracteres
+                        trabajo_resumen = (trabajo[:20] + '...') if len(trabajo) > 20 else trabajo
+                        
+                        st.session_state.nombre_cliente_etiqueta = cliente_resumen
+                        st.session_state.desc_trabajo_etiqueta = trabajo_resumen
+                        
                         st.session_state.orden_exitosa = True
                         
                         if es_cliente_nuevo: obtener_clientes.clear()
@@ -206,68 +220,104 @@ with tab1:
         
         st.info("La ventana de impresión debería abrirse automáticamente. Pegue esta etiqueta en las piezas.")
         
-        # HTML INYECTADO ESTRICTO PARA 50mm x 40mm
         html_etiqueta = f"""
         <html>
             <head>
                 <style>
-                    /* Reset general para evitar márgenes fantasmas */
+                    /* Reset estricto */
+                    * {{
+                        margin: 0;
+                        padding: 0;
+                        box-sizing: border-box;
+                    }}
                     body {{ 
                         font-family: 'Arial', sans-serif; 
                         text-align: center; 
-                        margin: 0; 
-                        padding: 0; 
                         background-color: white; 
                         color: black;
+                        width: 50mm;
+                        height: 40mm;
+                        overflow: hidden; /* Corta cualquier contenido extra */
                     }}
                     
-                    /* Tamaños relativos al lienzo de 50x40 */
-                    h1 {{ 
-                        font-size: 16px; 
-                        margin: 2mm 0 0 0; 
-                        letter-spacing: 1px; 
-                    }}
-                    p {{ 
-                        font-size: 10px; 
-                        margin: 0 0 1mm 0; 
-                        font-weight: bold; 
-                    }}
-                    img {{ 
-                        width: 25mm; /* Tamaño físico del QR */
-                        height: 25mm; 
-                        display: block; 
-                        margin: 0 auto; 
+                    /* Contenedor principal que agrupa todo y lo centra */
+                    .etiqueta-container {{
+                        display: flex;
+                        flex-direction: column;
+                        align-items: center;
+                        justify-content: center;
+                        height: 100%;
+                        padding: 1mm;
                     }}
 
-                    /* MAGIA NEGRA PARA LA IMPRESORA TÉRMICA */
+                    /* Estilos de texto */
+                    h1 {{ 
+                        font-size: 14px; 
+                        margin-bottom: 0.5mm;
+                        letter-spacing: 0.5px; 
+                    }}
+                    .cliente-text {{ 
+                        font-size: 9px; 
+                        font-weight: bold;
+                        margin-bottom: 0.5mm;
+                        white-space: nowrap; 
+                        overflow: hidden; 
+                        text-overflow: ellipsis; 
+                        max-width: 48mm; 
+                    }}
+                    .desc-text {{ 
+                        font-size: 8px; 
+                        margin-bottom: 0.5mm;
+                        white-space: nowrap; 
+                        overflow: hidden; 
+                        text-overflow: ellipsis; 
+                        max-width: 48mm;
+                        color: #333;
+                    }}
+                    img {{ 
+                        width: 22mm; 
+                        height: 22mm; 
+                    }}
+
                     @media print {{
                         @page {{
-                            size: 50mm 40mm; /* Fuerza al navegador a usar este papel */
-                            margin: 0mm;     /* Elimina márgenes blancos del navegador */
+                            size: 50mm 40mm; 
+                            margin: 0mm;     
                         }}
                         body {{
                             width: 50mm;
                             height: 40mm;
-                            overflow: hidden; /* Evita que imprima hojas en blanco extra */
+                            max-height: 40mm; 
+                            overflow: hidden;
+                            page-break-inside: avoid; /* Evita saltos de página internos */
                         }}
+                        
+                        /* Fuerza a ocultar cualquier elemento que quiera crear una nueva página */
+                        html, body {{ height: 40mm !important; }}
                     }}
                 </style>
             </head>
             <body onload="setTimeout(() => {{ window.print(); }}, 800)">
-                <h1>{st.session_state.num_orden_generada}</h1>
-                <p>TALLER</p>
-                <img src="data:image/png;base64,{st.session_state.qr_base64}" />
+                <div class="etiqueta-container">
+                    <h1>{st.session_state.num_orden_generada}</h1>
+                    <div class="cliente-text">{st.session_state.nombre_cliente_etiqueta}</div>
+                    <div class="desc-text">{st.session_state.desc_trabajo_etiqueta}</div>
+                    <img src="data:image/png;base64,{st.session_state.qr_base64}" />
+                </div>
             </body>
         </html>
         """
-        # Renderiza el marco visual. Mantenemos el height para que se vea en la web
-        components.html(html_etiqueta, height=200)
+        # Aumenté un poco el height aquí solo para que se previsualice bien en la pantalla de la compu,
+        # no afecta a la impresión porque el CSS @media print tiene el control
+        components.html(html_etiqueta, height=220)
         
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("🔄 Cargar un Nuevo Trabajo", type="primary"):
             st.session_state.orden_exitosa = False
             st.session_state.num_orden_generada = ""
             st.session_state.qr_base64 = ""
+            st.session_state.nombre_cliente_etiqueta = ""
+            st.session_state.desc_trabajo_etiqueta = ""
             st.rerun()
 
 # ------------------------------------------
