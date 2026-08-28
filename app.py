@@ -109,7 +109,6 @@ tab1, tab2 = st.tabs(["📦 Ingreso de Material", "⏱️ Carga de Horas"])
 # MÓDULO 1: INGRESO DE MATERIAL 
 # ------------------------------------------
 with tab1:
-    # Si la orden NO ha sido creada aún, mostramos el formulario normal
     if not st.session_state.orden_exitosa:
         st.markdown("### 🏢 Datos Comerciales")
         with st.container(border=True):
@@ -180,8 +179,8 @@ with tab1:
 
                         orden = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'read', [[orden_id]], {'fields': ['name']})
                         
-                        # --- GENERAR QR PARA LA ETIQUETA ---
-                        qr = qrcode.QRCode(version=1, box_size=10, border=2)
+                        # --- GENERAR QR OPTIMIZADO PARA ETIQUETA ---
+                        qr = qrcode.QRCode(version=1, box_size=10, border=1) # Borde reducido a 1 para maximizar tamaño
                         qr.add_data(orden[0]['name'])
                         qr.make(fit=True)
                         img_qr = qr.make_image(fill_color="black", back_color="white")
@@ -190,49 +189,81 @@ with tab1:
                         img_qr.save(buf, format="PNG")
                         qr_base64_str = base64.b64encode(buf.getvalue()).decode("utf-8")
                         
-                        # Guardamos en memoria que la orden fue un éxito y guardamos sus datos
                         st.session_state.num_orden_generada = orden[0]['name']
                         st.session_state.qr_base64 = qr_base64_str
                         st.session_state.orden_exitosa = True
                         
                         if es_cliente_nuevo: obtener_clientes.clear()
-                        
-                        # REINICIAMOS LA APP (Esto oculta el formulario y muestra la pantalla de impresión)
                         st.rerun()
                                 
                     except Exception as e:
                         st.error(f"Error: {e}")
 
-    # Si la orden FUE creada, ocultamos el formulario y mostramos la etiqueta para imprimir
+    # PANTALLA DE IMPRESIÓN (50x40mm)
     else:
         st.balloons()
-        st.success(f"✅ ¡Ingreso Registrado! Orden **{st.session_state.num_orden_generada}** creada en Odoo.")
+        st.success(f"✅ ¡Ingreso Registrado! Orden **{st.session_state.num_orden_generada}**.")
         
-        st.info("La ventana de impresión debería abrirse automáticamente. Pegue esta etiqueta en las piezas ingresadas.")
+        st.info("La ventana de impresión debería abrirse automáticamente. Pegue esta etiqueta en las piezas.")
         
-        # HTML Inyectado: Crea la etiqueta visualmente aislada y dispara window.print()
+        # HTML INYECTADO ESTRICTO PARA 50mm x 40mm
         html_etiqueta = f"""
         <html>
             <head>
                 <style>
-                    body {{ font-family: 'Arial', sans-serif; text-align: center; margin: 0; padding: 15px; background-color: white; color: black; }}
-                    h1 {{ font-size: 32px; margin: 0 0 5px 0; letter-spacing: 2px; }}
-                    p {{ font-size: 14px; margin: 0 0 15px 0; color: #333; font-weight: bold; }}
-                    img {{ width: 100%; max-width: 200px; display: block; margin: 0 auto; }}
+                    /* Reset general para evitar márgenes fantasmas */
+                    body {{ 
+                        font-family: 'Arial', sans-serif; 
+                        text-align: center; 
+                        margin: 0; 
+                        padding: 0; 
+                        background-color: white; 
+                        color: black;
+                    }}
+                    
+                    /* Tamaños relativos al lienzo de 50x40 */
+                    h1 {{ 
+                        font-size: 16px; 
+                        margin: 2mm 0 0 0; 
+                        letter-spacing: 1px; 
+                    }}
+                    p {{ 
+                        font-size: 10px; 
+                        margin: 0 0 1mm 0; 
+                        font-weight: bold; 
+                    }}
+                    img {{ 
+                        width: 25mm; /* Tamaño físico del QR */
+                        height: 25mm; 
+                        display: block; 
+                        margin: 0 auto; 
+                    }}
+
+                    /* MAGIA NEGRA PARA LA IMPRESORA TÉRMICA */
+                    @media print {{
+                        @page {{
+                            size: 50mm 40mm; /* Fuerza al navegador a usar este papel */
+                            margin: 0mm;     /* Elimina márgenes blancos del navegador */
+                        }}
+                        body {{
+                            width: 50mm;
+                            height: 40mm;
+                            overflow: hidden; /* Evita que imprima hojas en blanco extra */
+                        }}
+                    }}
                 </style>
             </head>
             <body onload="setTimeout(() => {{ window.print(); }}, 800)">
                 <h1>{st.session_state.num_orden_generada}</h1>
-                <p>ETIQUETA DE TALLER</p>
+                <p>TALLER</p>
                 <img src="data:image/png;base64,{st.session_state.qr_base64}" />
             </body>
         </html>
         """
-        # Renderiza la etiqueta en la app. El onload="window.print()" fuerza el cuadro de diálogo del sistema operativo
-        components.html(html_etiqueta, height=350)
+        # Renderiza el marco visual. Mantenemos el height para que se vea en la web
+        components.html(html_etiqueta, height=200)
         
         st.markdown("<br>", unsafe_allow_html=True)
-        # Botón para resetear todo el proceso. Al hacer click, la app vuelve al estado inicial en blanco.
         if st.button("🔄 Cargar un Nuevo Trabajo", type="primary"):
             st.session_state.orden_exitosa = False
             st.session_state.num_orden_generada = ""
