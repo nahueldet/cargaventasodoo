@@ -10,7 +10,7 @@ from streamlit_qrcode_scanner import qrcode_scanner
 # Configuración básica de la página
 st.set_page_config(page_title="Gestión de Taller", page_icon="⚡", layout="centered", initial_sidebar_state="collapsed")
 
-# --- CONTROL DE ESTADO (Para reiniciar la app después de cargar) ---
+# --- CONTROL DE ESTADO ---
 if 'orden_exitosa' not in st.session_state:
     st.session_state.orden_exitosa = False
 if 'num_orden_generada' not in st.session_state:
@@ -21,7 +21,6 @@ if 'nombre_cliente_etiqueta' not in st.session_state:
     st.session_state.nombre_cliente_etiqueta = ""
 if 'desc_trabajo_etiqueta' not in st.session_state:
     st.session_state.desc_trabajo_etiqueta = ""
-
 
 # --- ESTILOS CSS SÚPER MODERNOS ---
 st.markdown("""
@@ -62,6 +61,11 @@ st.markdown("""
     }
     div.stButton > button:first-child:hover { transform: translateY(-3px); box-shadow: 0 12px 20px rgba(106, 27, 154, 0.4); }
     h1, h2, h3 { font-family: 'Inter', sans-serif; color: #1e293b; font-weight: 700; }
+    
+    img[data-testid="stImage"] {
+        border-radius: 15px;
+        box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -98,17 +102,33 @@ def obtener_empleados():
         return [e['name'] for e in empleados_data if e['name']]
     except Exception: return ["Nahuel de Titto", "Taller 1"]
 
+# NUEVA FUNCIÓN: Obtener catálogo de productos
+@st.cache_data(ttl=300)
+def obtener_productos():
+    try:
+        common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
+        uid = common.authenticate(DB, USER, PASSWORD, {})
+        models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+        # Filtra productos que estén activos y marcados como "Puede ser vendido"
+        productos_data = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'search_read', 
+            [[['sale_ok', '=', True], ['active', '=', True]]], 
+            {'fields': ['id', 'display_name'], 'order': 'name asc'})
+        # Retorna un diccionario { "Nombre Producto": ID_Interno }
+        return {p['display_name']: p['id'] for p in productos_data}
+    except Exception: return {}
+
 with st.spinner("Sincronizando base de datos..."):
     lista_clientes = obtener_clientes()
     lista_empleados = obtener_empleados()
+    dict_productos = obtener_productos()
 
 opciones_clientes = ["Seleccionar...", "➕ CREAR NUEVO CLIENTE"] + lista_clientes
 opciones_empleados = ["Seleccionar..."] + lista_empleados
 
 # ==========================================
-# PESTAÑAS (MÓDULOS)
+# PESTAÑAS (MÓDULOS) AHORA SON 3
 # ==========================================
-tab1, tab2 = st.tabs(["📦 Ingreso de Material", "⏱️ Carga de Horas"])
+tab1, tab2, tab3 = st.tabs(["📦 Ingreso", "⏱️ Horas", "✏️ Editar Orden"])
 
 # ------------------------------------------
 # MÓDULO 1: INGRESO DE MATERIAL 
@@ -118,7 +138,7 @@ with tab1:
         st.markdown("### 🏢 Datos Comerciales")
         with st.container(border=True):
             empleado = st.selectbox("Recepcionista (Técnico interno)", opciones_empleados, key="recepcion_emp")
-            cliente_seleccionado = st.selectbox("Empresa / Cliente a facturar", opciones_clientes)
+            cliente_seleccionado = st.selectbox("Empresa / Cliente a facturar", opciones_clientes, key="ingreso_cli")
             
             cliente_final = ""
             telefono_final = ""
@@ -144,7 +164,7 @@ with tab1:
                 st.image(foto_adjunta, caption="Archivo listo", use_container_width=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🚀 Enviar Orden al Taller", type="primary"):
+        if st.button("🚀 Enviar Orden al Taller", type="primary", key="btn_ingreso"):
             if empleado == "Seleccionar...": st.error("⚠️ Faltan datos.")
             elif cliente_seleccionado == "Seleccionar...": st.error("⚠️ Faltan datos.")
             elif not trabajo: st.error("⚠️ Describa el trabajo.")
@@ -184,7 +204,6 @@ with tab1:
 
                         orden = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'read', [[orden_id]], {'fields': ['name']})
                         
-                        # --- GENERAR QR ---
                         qr = qrcode.QRCode(version=1, box_size=10, border=1) 
                         qr.add_data(orden[0]['name'])
                         qr.make(fit=True)
@@ -196,15 +215,8 @@ with tab1:
                         
                         st.session_state.num_orden_generada = orden[0]['name']
                         st.session_state.qr_base64 = qr_base64_str
-                        
-                        # Resumir el nombre del cliente a los primeros 15 caracteres para la etiqueta
-                        cliente_resumen = (cliente_final[:15] + '...') if len(cliente_final) > 15 else cliente_final
-                        # Resumir el trabajo a los primeros 20 caracteres
-                        trabajo_resumen = (trabajo[:20] + '...') if len(trabajo) > 20 else trabajo
-                        
-                        st.session_state.nombre_cliente_etiqueta = cliente_resumen
-                        st.session_state.desc_trabajo_etiqueta = trabajo_resumen
-                        
+                        st.session_state.nombre_cliente_etiqueta = (cliente_final[:15] + '...') if len(cliente_final) > 15 else cliente_final
+                        st.session_state.desc_trabajo_etiqueta = (trabajo[:20] + '...') if len(trabajo) > 20 else trabajo
                         st.session_state.orden_exitosa = True
                         
                         if es_cliente_nuevo: obtener_clientes.clear()
@@ -213,86 +225,29 @@ with tab1:
                     except Exception as e:
                         st.error(f"Error: {e}")
 
-    # PANTALLA DE IMPRESIÓN (50x40mm)
+    # PANTALLA DE IMPRESIÓN 
     else:
-        st.balloons()
         st.success(f"✅ ¡Ingreso Registrado! Orden **{st.session_state.num_orden_generada}**.")
+        colA, colB, colC = st.columns([1, 2, 1])
+        with colB:
+            try: st.image("exito.jpeg", caption="¡Aprobado!", use_container_width=True)
+            except Exception: pass
         
-        st.info("La ventana de impresión debería abrirse automáticamente. Pegue esta etiqueta en las piezas.")
-        
+        st.info("La ventana de impresión debería abrirse automáticamente.")
         html_etiqueta = f"""
         <html>
             <head>
                 <style>
-                    /* Reset estricto */
-                    * {{
-                        margin: 0;
-                        padding: 0;
-                        box-sizing: border-box;
-                    }}
-                    body {{ 
-                        font-family: 'Arial', sans-serif; 
-                        text-align: center; 
-                        background-color: white; 
-                        color: black;
-                        width: 50mm;
-                        height: 40mm;
-                        overflow: hidden; /* Corta cualquier contenido extra */
-                    }}
-                    
-                    /* Contenedor principal que agrupa todo y lo centra */
-                    .etiqueta-container {{
-                        display: flex;
-                        flex-direction: column;
-                        align-items: center;
-                        justify-content: center;
-                        height: 100%;
-                        padding: 1mm;
-                    }}
-
-                    /* Estilos de texto */
-                    h1 {{ 
-                        font-size: 14px; 
-                        margin-bottom: 0.5mm;
-                        letter-spacing: 0.5px; 
-                    }}
-                    .cliente-text {{ 
-                        font-size: 9px; 
-                        font-weight: bold;
-                        margin-bottom: 0.5mm;
-                        white-space: nowrap; 
-                        overflow: hidden; 
-                        text-overflow: ellipsis; 
-                        max-width: 48mm; 
-                    }}
-                    .desc-text {{ 
-                        font-size: 8px; 
-                        margin-bottom: 0.5mm;
-                        white-space: nowrap; 
-                        overflow: hidden; 
-                        text-overflow: ellipsis; 
-                        max-width: 48mm;
-                        color: #333;
-                    }}
-                    img {{ 
-                        width: 22mm; 
-                        height: 22mm; 
-                    }}
-
+                    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+                    body {{ font-family: 'Arial', sans-serif; text-align: center; background-color: white; color: black; width: 50mm; height: 40mm; overflow: hidden; }}
+                    .etiqueta-container {{ display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; padding: 1mm; }}
+                    h1 {{ font-size: 14px; margin-bottom: 0.5mm; letter-spacing: 0.5px; }}
+                    .cliente-text {{ font-size: 9px; font-weight: bold; margin-bottom: 0.5mm; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 48mm; }}
+                    .desc-text {{ font-size: 8px; margin-bottom: 0.5mm; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 48mm; color: #333; }}
+                    img {{ width: 22mm; height: 22mm; }}
                     @media print {{
-                        @page {{
-                            size: 50mm 40mm; 
-                            margin: 0mm;     
-                        }}
-                        body {{
-                            width: 50mm;
-                            height: 40mm;
-                            max-height: 40mm; 
-                            overflow: hidden;
-                            page-break-inside: avoid; /* Evita saltos de página internos */
-                        }}
-                        
-                        /* Fuerza a ocultar cualquier elemento que quiera crear una nueva página */
+                        @page {{ size: 50mm 40mm; margin: 0mm; }}
+                        body {{ width: 50mm; height: 40mm; max-height: 40mm; overflow: hidden; page-break-inside: avoid; }}
                         html, body {{ height: 40mm !important; }}
                     }}
                 </style>
@@ -307,12 +262,9 @@ with tab1:
             </body>
         </html>
         """
-        # Aumenté un poco el height aquí solo para que se previsualice bien en la pantalla de la compu,
-        # no afecta a la impresión porque el CSS @media print tiene el control
         components.html(html_etiqueta, height=220)
-        
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔄 Cargar un Nuevo Trabajo", type="primary"):
+        if st.button("🔄 Cargar un Nuevo Trabajo", type="primary", key="btn_reiniciar"):
             st.session_state.orden_exitosa = False
             st.session_state.num_orden_generada = ""
             st.session_state.qr_base64 = ""
@@ -325,10 +277,10 @@ with tab1:
 # ------------------------------------------
 with tab2:
     st.markdown("### 🔍 Buscar Orden")
-    qr_code_scanned = qrcode_scanner(key='scanner')
+    qr_code_scanned = qrcode_scanner(key='scanner_horas')
     texto_busqueda_inicial = qr_code_scanned if qr_code_scanned else ""
 
-    busqueda = st.text_input("Ingrese Nro de Orden (Ej: SO0045) o descripción", value=texto_busqueda_inicial, key="input_busqueda")
+    busqueda = st.text_input("Ingrese Nro de Orden o descripción", value=texto_busqueda_inicial, key="input_busqueda_horas")
     
     if busqueda:
         with st.spinner("Buscando en el sistema..."):
@@ -350,7 +302,7 @@ with tab2:
                     opciones_ord = {f"{o['name']} - Cliente: {o['partner_id'][1]}": o['id'] for o in ordenes}
                     
                     with st.container(border=True):
-                        orden_seleccionada = st.selectbox("Seleccione la orden:", list(opciones_ord.keys()))
+                        orden_seleccionada = st.selectbox("Seleccione la orden:", list(opciones_ord.keys()), key="sel_ord_horas")
                         orden_id = opciones_ord[orden_seleccionada]
                         
                         lineas_orden = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', 
@@ -362,16 +314,16 @@ with tab2:
                                  if linea.get('name'): trabajos_disponibles.append(linea['name'])
                         
                         if not trabajos_disponibles: trabajos_disponibles = ["Trabajo General de la Orden"]
-                        trabajo_a_imputar = st.selectbox("¿A qué trabajo o pieza le cargará las horas?", trabajos_disponibles)
+                        trabajo_a_imputar = st.selectbox("¿A qué trabajo le cargará las horas?", trabajos_disponibles, key="sel_trab_horas")
                                 
                     st.markdown("### ⏱️ Registrar Avance")
                     with st.form("form_horas", clear_on_submit=True):
-                        tec = st.selectbox("Técnico", opciones_empleados)
+                        tec = st.selectbox("Técnico", opciones_empleados, key="tec_horas")
                         colA, colB = st.columns(2)
-                        with colA: dia_trabajo = st.date_input("Día del trabajo", value=date.today())
-                        with colB: horas_trabajadas = st.number_input("Horas utilizadas", min_value=0.0, step=0.25, value=1.0)
+                        with colA: dia_trabajo = st.date_input("Día del trabajo", value=date.today(), key="dia_horas")
+                        with colB: horas_trabajadas = st.number_input("Horas utilizadas", min_value=0.0, step=0.25, value=1.0, key="num_horas")
                             
-                        notas_extra = st.text_area("Notas / Observaciones de lo que se hizo")
+                        notas_extra = st.text_area("Notas / Observaciones", key="notas_horas")
                         submit_horas = st.form_submit_button("Guardar Registro", type="primary")
                         
                         if submit_horas:
@@ -386,7 +338,90 @@ with tab2:
                                     'order_id': orden_id, 'display_type': 'line_note', 'name': texto_registro              
                                 }])
                                 st.success("✅ ¡Horas anexadas exitosamente a la orden!")
+                                colX, colY, colZ = st.columns([1, 2, 1])
+                                with colY:
+                                    try: st.image("exito.jpeg", caption="¡Trabajo Imputado!", use_container_width=True)
+                                    except Exception: pass
                 else:
-                    st.warning("No se encontraron órdenes ni trabajos con esa búsqueda.")
+                    st.warning("No se encontraron órdenes con esa búsqueda.")
+            except Exception as e:
+                st.error(f"Error de conexión: {e}")
+
+# ------------------------------------------
+# MÓDULO 3: EDICIÓN RÁPIDA (NUEVO)
+# ------------------------------------------
+with tab3:
+    st.markdown("### 🔍 Buscar Orden a Editar")
+    # Este buscador es más sencillo, solo busca por número de orden para evitar confusión
+    busqueda_edit = st.text_input("Ingrese Nro de Orden (Ej: S0045)", key="input_busqueda_edit")
+    
+    if busqueda_edit:
+        with st.spinner("Buscando orden..."):
+            try:
+                common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
+                uid = common.authenticate(DB, USER, PASSWORD, {})
+                models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+                
+                so_ids = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search', [[['name', 'ilike', busqueda_edit]]])
+                
+                if so_ids:
+                    ordenes = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search_read', 
+                                                [[['id', 'in', so_ids]]], {'fields': ['id', 'name', 'partner_id']})
+                    
+                    opciones_ord_edit = {f"{o['name']} - Cliente Actual: {o['partner_id'][1]}": o for o in ordenes}
+                    
+                    with st.container(border=True):
+                        orden_seleccionada = st.selectbox("Seleccione la orden a editar:", list(opciones_ord_edit.keys()), key="sel_ord_edit")
+                        orden_data = opciones_ord_edit[orden_seleccionada]
+                        orden_id_edit = orden_data['id']
+                        
+                        st.markdown("---")
+                        
+                        # --- SECCIÓN A: CAMBIAR CLIENTE ---
+                        st.markdown("#### 👤 Cambiar Cliente")
+                        nuevo_cliente_nombre = st.selectbox("Seleccionar nuevo cliente para esta orden", ["Seleccionar..."] + lista_clientes, key="edit_cli")
+                        
+                        if st.button("Actualizar Cliente", key="btn_act_cli"):
+                            if nuevo_cliente_nombre == "Seleccionar...":
+                                st.warning("⚠️ Seleccione un cliente válido de la lista.")
+                            else:
+                                cliente_busqueda = models.execute_kw(DB, uid, PASSWORD, 'res.partner', 'search', [[['name', '=', nuevo_cliente_nombre]]], {'limit': 1})
+                                if cliente_busqueda:
+                                    # Escribimos el nuevo partner_id en la orden
+                                    models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'write', [[orden_id_edit], {'partner_id': cliente_busqueda[0]}])
+                                    st.success(f"✅ El cliente de la orden {orden_data['name']} ahora es {nuevo_cliente_nombre}.")
+                                    st.rerun()
+                        
+                        st.markdown("---")
+                        
+                        # --- SECCIÓN B: AGREGAR ARTÍCULOS ---
+                        st.markdown("#### 🛒 Agregar Artículo a la Orden")
+                        st.write("Seleccione repuestos o artículos del catálogo de Odoo para sumarlos a este trabajo.")
+                        
+                        opciones_prod = ["Seleccionar..."] + list(dict_productos.keys())
+                        prod_sel = st.selectbox("Producto / Artículo", opciones_prod, key="sel_prod")
+                        
+                        col1_edit, col2_edit = st.columns(2)
+                        with col1_edit:
+                            cant = st.number_input("Cantidad", min_value=1.0, step=1.0, value=1.0, key="cant_prod")
+                        
+                        if st.button("➕ Agregar Artículo", type="primary", key="btn_add_prod"):
+                            if prod_sel == "Seleccionar...":
+                                st.warning("⚠️ Debe seleccionar un producto del catálogo.")
+                            else:
+                                prod_id = dict_productos[prod_sel]
+                                
+                                # Creamos la línea de pedido vinculada al producto y la orden
+                                models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [{
+                                    'order_id': orden_id_edit,
+                                    'product_id': prod_id,
+                                    'product_uom_qty': cant
+                                }])
+                                
+                                st.success(f"✅ Se agregaron {cant} unidades de '{prod_sel}' a la orden.")
+                                
+                else:
+                    st.warning("No se encontró ninguna orden con ese número.")
+                    
             except Exception as e:
                 st.error(f"Error de conexión: {e}")
