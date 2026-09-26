@@ -158,9 +158,8 @@ with tab1:
                 
             trabajo = st.text_input("Descripción libre del trabajo a realizar")
             
-            # --- NUEVA SECCIÓN: CARGA DE PRODUCTOS AL INGRESO ---
             with st.expander("🛒 Cargar Artículo/Servicio Odoo (Opcional)"):
-                st.write("Seleccione si desea adjuntar un código de servicio al trabajo (ej. 'Servicio de Tornería' o repuestos).")
+                st.write("Seleccione si desea adjuntar un código de servicio al trabajo.")
                 prod_sel_ingreso = st.selectbox("Producto o Servicio a facturar", opciones_prod, key="prod_ingreso")
                 
                 colA_prod, colB_prod = st.columns(2)
@@ -182,7 +181,6 @@ with tab1:
                         uid = common.authenticate(DB, USER, PASSWORD, {})
                         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
                         
-                        # 1. Gestionar Cliente
                         if es_cliente_nuevo:
                             datos_nuevo = {'name': cliente_final, 'is_company': True}
                             if telefono_final: datos_nuevo['phone'] = telefono_final
@@ -191,7 +189,6 @@ with tab1:
                             cliente_busqueda = models.execute_kw(DB, uid, PASSWORD, 'res.partner', 'search', [[['name', '=', cliente_final]]], {'limit': 1})
                             cliente_id_odoo = cliente_busqueda[0] if cliente_busqueda else False
                              
-                        # 2. Crear Orden
                         observaciones = f"=== INGRESO DE MATERIAL ===\nRecepcionado por: {empleado}\nTraído por: {persona_deja_trabajo if persona_deja_trabajo else 'No especificado'}\n"
                         orden_id = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'create', [{
                             'partner_id': cliente_id_odoo,
@@ -199,13 +196,10 @@ with tab1:
                             'note': observaciones
                         }])
                         
-                        # 3. Crear Línea de Sección (El texto descriptivo libre)
                         models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [{
                             'order_id': orden_id, 'display_type': 'line_section', 'name': trabajo              
                         }])
                         
-                        # 4. Crear Línea de Producto (NUEVO)
-                        # Solo lo carga si el operario seleccionó algo distinto a "(Ninguno)"
                         if prod_sel_ingreso != "(Ninguno - Solo texto)":
                             prod_id = dict_productos[prod_sel_ingreso]
                             models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [{
@@ -214,7 +208,6 @@ with tab1:
                                 'product_uom_qty': cant_ingreso
                             }])
                         
-                        # 5. Adjuntar Foto
                         if foto_adjunta is not None:
                             foto_base64 = base64.b64encode(foto_adjunta.read()).decode('utf-8')
                             models.execute_kw(DB, uid, PASSWORD, 'ir.attachment', 'create', [{
@@ -222,7 +215,6 @@ with tab1:
                                 'res_model': 'sale.order', 'res_id': orden_id         
                             }])
 
-                        # 6. Éxito y QR
                         orden = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'read', [[orden_id]], {'fields': ['name']})
                         
                         qr = qrcode.QRCode(version=1, box_size=10, border=1) 
@@ -301,7 +293,7 @@ with tab2:
     qr_code_scanned = qrcode_scanner(key='scanner_horas')
     texto_busqueda_inicial = qr_code_scanned if qr_code_scanned else ""
 
-    busqueda = st.text_input("Ingrese Nro de Orden o descripción", value=texto_busqueda_inicial, key="input_busqueda_horas")
+    busqueda = st.text_input("Buscar por Cliente, Nro de Orden o Descripción", value=texto_busqueda_inicial, key="input_busqueda_horas")
     
     if busqueda:
         with st.spinner("Buscando en el sistema..."):
@@ -310,15 +302,27 @@ with tab2:
                 uid = common.authenticate(DB, USER, PASSWORD, {})
                 models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
                 
-                so_ids = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search', [[['name', 'ilike', busqueda]]])
+                # 1. Búsqueda por Número de Orden
+                so_ids_name = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search', [[['name', 'ilike', busqueda]]])
+                
+                # 2. Búsqueda por Descripción del Trabajo (Líneas)
                 lineas = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', [[['name', 'ilike', busqueda]]], {'fields': ['order_id']})
                 line_so_ids = [line['order_id'][0] for line in lineas if line.get('order_id')]
                 
-                all_ids = list(set(so_ids + line_so_ids))
+                # 3. NUEVO: Búsqueda por Nombre de Cliente
+                partner_ids = models.execute_kw(DB, uid, PASSWORD, 'res.partner', 'search', [[['name', 'ilike', busqueda]]])
+                so_ids_partner = []
+                if partner_ids:
+                    so_ids_partner = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search', [[['partner_id', 'in', partner_ids]]])
+                
+                # Juntamos todos los resultados encontrados sin repetir (usando set)
+                all_ids = list(set(so_ids_name + line_so_ids + so_ids_partner))
                 
                 if all_ids:
+                    # Traemos las órdenes. El "order": "id desc" asegura que las más recientes salgan primero, limitamos a 50 para velocidad.
                     ordenes = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search_read', 
-                                                [[['id', 'in', all_ids]]], {'fields': ['id', 'name', 'partner_id']})
+                                                [[['id', 'in', all_ids]]], 
+                                                {'fields': ['id', 'name', 'partner_id'], 'order': 'id desc', 'limit': 50})
                     
                     opciones_ord = {f"{o['name']} - Cliente: {o['partner_id'][1]}": o['id'] for o in ordenes}
                     
@@ -424,7 +428,7 @@ with tab3:
                         with col1_edit:
                             cant_edit = st.number_input("Cantidad", min_value=1.0, step=1.0, value=1.0, key="cant_prod_edit")
                         
-                        if st.button("➕ Agregar Artículo", type="primary", key="btn_add_prod"):
+                        if st.button("➕ Agregar Artículo", type="primary", key="btn_add_prod_edit"):
                             if prod_sel_edit == "Seleccionar...":
                                 st.warning("⚠️ Debe seleccionar un producto del catálogo.")
                             else:
