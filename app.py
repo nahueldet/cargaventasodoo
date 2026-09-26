@@ -102,18 +102,15 @@ def obtener_empleados():
         return [e['name'] for e in empleados_data if e['name']]
     except Exception: return ["Nahuel de Titto", "Taller 1"]
 
-# NUEVA FUNCIÓN: Obtener catálogo de productos
 @st.cache_data(ttl=300)
 def obtener_productos():
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USER, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        # Filtra productos que estén activos y marcados como "Puede ser vendido"
         productos_data = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'search_read', 
             [[['sale_ok', '=', True], ['active', '=', True]]], 
             {'fields': ['id', 'display_name'], 'order': 'name asc'})
-        # Retorna un diccionario { "Nombre Producto": ID_Interno }
         return {p['display_name']: p['id'] for p in productos_data}
     except Exception: return {}
 
@@ -124,9 +121,10 @@ with st.spinner("Sincronizando base de datos..."):
 
 opciones_clientes = ["Seleccionar...", "➕ CREAR NUEVO CLIENTE"] + lista_clientes
 opciones_empleados = ["Seleccionar..."] + lista_empleados
+opciones_prod = ["(Ninguno - Solo texto)"] + list(dict_productos.keys())
 
 # ==========================================
-# PESTAÑAS (MÓDULOS) AHORA SON 3
+# PESTAÑAS (MÓDULOS)
 # ==========================================
 tab1, tab2, tab3 = st.tabs(["📦 Ingreso", "⏱️ Horas", "✏️ Editar Orden"])
 
@@ -158,15 +156,24 @@ with tab1:
             with col1: persona_deja_trabajo = st.text_input("Traído por (Chofer)")
             with col2: fecha_entrega = st.date_input("Fecha Prometida", value=date.today())
                 
-            trabajo = st.text_input("Descripción (Ej: Corte EDM)")
+            trabajo = st.text_input("Descripción libre del trabajo a realizar")
+            
+            # --- NUEVA SECCIÓN: CARGA DE PRODUCTOS AL INGRESO ---
+            with st.expander("🛒 Cargar Artículo/Servicio Odoo (Opcional)"):
+                st.write("Seleccione si desea adjuntar un código de servicio al trabajo (ej. 'Servicio de Tornería' o repuestos).")
+                prod_sel_ingreso = st.selectbox("Producto o Servicio a facturar", opciones_prod, key="prod_ingreso")
+                
+                colA_prod, colB_prod = st.columns(2)
+                with colA_prod: cant_ingreso = st.number_input("Cantidad", min_value=1.0, step=1.0, value=1.0, key="cant_ingreso")
+            
             foto_adjunta = st.file_uploader("Evidencia fotográfica", type=['jpg', 'jpeg', 'png'])
             if foto_adjunta is not None:
                 st.image(foto_adjunta, caption="Archivo listo", use_container_width=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("🚀 Enviar Orden al Taller", type="primary", key="btn_ingreso"):
-            if empleado == "Seleccionar...": st.error("⚠️ Faltan datos.")
-            elif cliente_seleccionado == "Seleccionar...": st.error("⚠️ Faltan datos.")
+            if empleado == "Seleccionar...": st.error("⚠️ Faltan datos: Indique recepcionista.")
+            elif cliente_seleccionado == "Seleccionar...": st.error("⚠️ Faltan datos: Seleccione cliente.")
             elif not trabajo: st.error("⚠️ Describa el trabajo.")
             else:
                 with st.spinner("Procesando en Odoo..."):
@@ -175,6 +182,7 @@ with tab1:
                         uid = common.authenticate(DB, USER, PASSWORD, {})
                         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
                         
+                        # 1. Gestionar Cliente
                         if es_cliente_nuevo:
                             datos_nuevo = {'name': cliente_final, 'is_company': True}
                             if telefono_final: datos_nuevo['phone'] = telefono_final
@@ -183,18 +191,30 @@ with tab1:
                             cliente_busqueda = models.execute_kw(DB, uid, PASSWORD, 'res.partner', 'search', [[['name', '=', cliente_final]]], {'limit': 1})
                             cliente_id_odoo = cliente_busqueda[0] if cliente_busqueda else False
                              
+                        # 2. Crear Orden
                         observaciones = f"=== INGRESO DE MATERIAL ===\nRecepcionado por: {empleado}\nTraído por: {persona_deja_trabajo if persona_deja_trabajo else 'No especificado'}\n"
-                        
                         orden_id = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'create', [{
                             'partner_id': cliente_id_odoo,
                             'commitment_date': fecha_entrega.strftime("%Y-%m-%d"),
                             'note': observaciones
                         }])
                         
+                        # 3. Crear Línea de Sección (El texto descriptivo libre)
                         models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [{
                             'order_id': orden_id, 'display_type': 'line_section', 'name': trabajo              
                         }])
                         
+                        # 4. Crear Línea de Producto (NUEVO)
+                        # Solo lo carga si el operario seleccionó algo distinto a "(Ninguno)"
+                        if prod_sel_ingreso != "(Ninguno - Solo texto)":
+                            prod_id = dict_productos[prod_sel_ingreso]
+                            models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [{
+                                'order_id': orden_id,
+                                'product_id': prod_id,
+                                'product_uom_qty': cant_ingreso
+                            }])
+                        
+                        # 5. Adjuntar Foto
                         if foto_adjunta is not None:
                             foto_base64 = base64.b64encode(foto_adjunta.read()).decode('utf-8')
                             models.execute_kw(DB, uid, PASSWORD, 'ir.attachment', 'create', [{
@@ -202,6 +222,7 @@ with tab1:
                                 'res_model': 'sale.order', 'res_id': orden_id         
                             }])
 
+                        # 6. Éxito y QR
                         orden = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'read', [[orden_id]], {'fields': ['name']})
                         
                         qr = qrcode.QRCode(version=1, box_size=10, border=1) 
@@ -348,11 +369,10 @@ with tab2:
                 st.error(f"Error de conexión: {e}")
 
 # ------------------------------------------
-# MÓDULO 3: EDICIÓN RÁPIDA (NUEVO)
+# MÓDULO 3: EDICIÓN RÁPIDA 
 # ------------------------------------------
 with tab3:
     st.markdown("### 🔍 Buscar Orden a Editar")
-    # Este buscador es más sencillo, solo busca por número de orden para evitar confusión
     busqueda_edit = st.text_input("Ingrese Nro de Orden (Ej: S0045)", key="input_busqueda_edit")
     
     if busqueda_edit:
@@ -387,7 +407,6 @@ with tab3:
                             else:
                                 cliente_busqueda = models.execute_kw(DB, uid, PASSWORD, 'res.partner', 'search', [[['name', '=', nuevo_cliente_nombre]]], {'limit': 1})
                                 if cliente_busqueda:
-                                    # Escribimos el nuevo partner_id en la orden
                                     models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'write', [[orden_id_edit], {'partner_id': cliente_busqueda[0]}])
                                     st.success(f"✅ El cliente de la orden {orden_data['name']} ahora es {nuevo_cliente_nombre}.")
                                     st.rerun()
@@ -398,30 +417,26 @@ with tab3:
                         st.markdown("#### 🛒 Agregar Artículo a la Orden")
                         st.write("Seleccione repuestos o artículos del catálogo de Odoo para sumarlos a este trabajo.")
                         
-                        opciones_prod = ["Seleccionar..."] + list(dict_productos.keys())
-                        prod_sel = st.selectbox("Producto / Artículo", opciones_prod, key="sel_prod")
+                        opciones_prod_edit = ["Seleccionar..."] + list(dict_productos.keys())
+                        prod_sel_edit = st.selectbox("Producto / Artículo", opciones_prod_edit, key="sel_prod_edit")
                         
                         col1_edit, col2_edit = st.columns(2)
                         with col1_edit:
-                            cant = st.number_input("Cantidad", min_value=1.0, step=1.0, value=1.0, key="cant_prod")
+                            cant_edit = st.number_input("Cantidad", min_value=1.0, step=1.0, value=1.0, key="cant_prod_edit")
                         
                         if st.button("➕ Agregar Artículo", type="primary", key="btn_add_prod"):
-                            if prod_sel == "Seleccionar...":
+                            if prod_sel_edit == "Seleccionar...":
                                 st.warning("⚠️ Debe seleccionar un producto del catálogo.")
                             else:
-                                prod_id = dict_productos[prod_sel]
-                                
-                                # Creamos la línea de pedido vinculada al producto y la orden
+                                prod_id_edit = dict_productos[prod_sel_edit]
                                 models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [{
                                     'order_id': orden_id_edit,
-                                    'product_id': prod_id,
-                                    'product_uom_qty': cant
+                                    'product_id': prod_id_edit,
+                                    'product_uom_qty': cant_edit
                                 }])
-                                
-                                st.success(f"✅ Se agregaron {cant} unidades de '{prod_sel}' a la orden.")
+                                st.success(f"✅ Se agregaron {cant_edit} unidades de '{prod_sel_edit}' a la orden.")
                                 
                 else:
                     st.warning("No se encontró ninguna orden con ese número.")
-                    
             except Exception as e:
                 st.error(f"Error de conexión: {e}")
