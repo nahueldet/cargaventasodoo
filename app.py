@@ -6,6 +6,7 @@ import qrcode
 from io import BytesIO
 import streamlit.components.v1 as components
 from streamlit_qrcode_scanner import qrcode_scanner
+import pandas as pd
 
 # Configuración básica de la página
 st.set_page_config(page_title="Gestión de Taller", page_icon="⚡", layout="centered", initial_sidebar_state="collapsed")
@@ -22,7 +23,7 @@ if 'nombre_cliente_etiqueta' not in st.session_state:
 if 'desc_trabajo_etiqueta' not in st.session_state:
     st.session_state.desc_trabajo_etiqueta = ""
 if 'articulos_temporales' not in st.session_state:
-    st.session_state.articulos_temporales = [] # Esta es la nueva "lista de compras"
+    st.session_state.articulos_temporales = [] 
 
 # --- ESTILOS CSS SÚPER MODERNOS ---
 st.markdown("""
@@ -63,11 +64,7 @@ st.markdown("""
     }
     div.stButton > button:first-child:hover { transform: translateY(-3px); box-shadow: 0 12px 20px rgba(106, 27, 154, 0.4); }
     h1, h2, h3 { font-family: 'Inter', sans-serif; color: #1e293b; font-weight: 700; }
-    
-    img[data-testid="stImage"] {
-        border-radius: 15px;
-        box-shadow: 0 10px 20px rgba(0,0,0,0.2);
-    }
+    img[data-testid="stImage"] { border-radius: 15px; box-shadow: 0 10px 20px rgba(0,0,0,0.2); }
 </style>
 """, unsafe_allow_html=True)
 
@@ -123,6 +120,7 @@ with st.spinner("Sincronizando base de datos..."):
 
 opciones_clientes = ["Seleccionar...", "➕ CREAR NUEVO CLIENTE"] + lista_clientes
 opciones_empleados = ["Seleccionar..."] + lista_empleados
+opciones_prod = ["(Ninguno - Solo texto)"] + list(dict_productos.keys())
 
 # ==========================================
 # PESTAÑAS (MÓDULOS)
@@ -151,7 +149,7 @@ with tab1:
             else:
                 cliente_final = cliente_seleccionado
 
-        st.markdown("### ⚙️ Especificaciones")
+        st.markdown("### ⚙️️ Especificaciones")
         with st.container(border=True):
             col1, col2 = st.columns(2)
             with col1: persona_deja_trabajo = st.text_input("Traído por (Chofer)", key="ingreso_chofer")
@@ -163,45 +161,30 @@ with tab1:
             if foto_adjunta is not None:
                 st.image(foto_adjunta, caption="Archivo listo", use_container_width=True)
         
-        # --- NUEVA SECCIÓN: CARRITO DE PRODUCTOS MÚLTIPLES ---
         st.markdown("### 🛒 Artículos / Materiales (Opcional)")
         with st.container(border=True):
-            st.write("Agregue aquí todos los servicios o repuestos necesarios.")
-            
-            # Mostrar la lista de artículos ya agregados
             if st.session_state.articulos_temporales:
                 for idx, item in enumerate(st.session_state.articulos_temporales):
                     c1, c2, c3 = st.columns([5, 3, 2])
                     c1.markdown(f"🔹 **{item['nombre']}**")
                     c2.markdown(f"Cant: **{item['cant']}**")
-                    # Botón para eliminar un artículo de la lista
                     if c3.button("❌ Quitar", key=f"del_art_{idx}"):
                         st.session_state.articulos_temporales.pop(idx)
                         st.rerun()
                 st.markdown("---")
             
-            # Controles para agregar un nuevo artículo a la lista
             c_prod, c_cant, c_btn = st.columns([5, 2, 3])
-            with c_prod:
-                prod_sel_ingreso = st.selectbox("Seleccionar producto", ["Seleccionar..."] + list(dict_productos.keys()), key="sel_nuevo_prod")
-            with c_cant:
-                cant_ingreso = st.number_input("Cant", min_value=0.25, step=1.0, value=1.0, key="cant_nuevo_prod")
+            with c_prod: prod_sel_ingreso = st.selectbox("Seleccionar producto", ["Seleccionar..."] + list(dict_productos.keys()), key="sel_nuevo_prod")
+            with c_cant: cant_ingreso = st.number_input("Cant", min_value=0.25, step=1.0, value=1.0, key="cant_nuevo_prod")
             with c_btn:
                 st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
                 if st.button("➕ Añadir a la lista", use_container_width=True):
                     if prod_sel_ingreso != "Seleccionar...":
-                        st.session_state.articulos_temporales.append({
-                            'nombre': prod_sel_ingreso,
-                            'id': dict_productos[prod_sel_ingreso],
-                            'cant': cant_ingreso
-                        })
-                        st.rerun() # Recarga la pantalla para mostrar el nuevo item
-                    else:
-                        st.warning("Elija un producto primero.")
+                        st.session_state.articulos_temporales.append({'nombre': prod_sel_ingreso, 'id': dict_productos[prod_sel_ingreso], 'cant': cant_ingreso})
+                        st.rerun()
+                    else: st.warning("Elija un producto primero.")
 
         st.markdown("<br>", unsafe_allow_html=True)
-        
-        # --- BOTÓN DE ENVÍO FINAL ---
         if st.button("🚀 Enviar Orden al Taller", type="primary", key="btn_ingreso"):
             if empleado == "Seleccionar...": st.error("⚠️ Faltan datos: Indique recepcionista.")
             elif cliente_seleccionado == "Seleccionar...": st.error("⚠️ Faltan datos: Seleccione cliente.")
@@ -213,7 +196,6 @@ with tab1:
                         uid = common.authenticate(DB, USER, PASSWORD, {})
                         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
                         
-                        # 1. Gestionar Cliente
                         if es_cliente_nuevo:
                             datos_nuevo = {'name': cliente_final, 'is_company': True}
                             if telefono_final: datos_nuevo['phone'] = telefono_final
@@ -222,37 +204,21 @@ with tab1:
                             cliente_busqueda = models.execute_kw(DB, uid, PASSWORD, 'res.partner', 'search', [[['name', '=', cliente_final]]], {'limit': 1})
                             cliente_id_odoo = cliente_busqueda[0] if cliente_busqueda else False
                              
-                        # 2. Crear Orden
                         observaciones = f"=== INGRESO DE MATERIAL ===\nRecepcionado por: {empleado}\nTraído por: {persona_deja_trabajo if persona_deja_trabajo else 'No especificado'}\n"
                         orden_id = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'create', [{
-                            'partner_id': cliente_id_odoo,
-                            'commitment_date': fecha_entrega.strftime("%Y-%m-%d"),
-                            'note': observaciones
+                            'partner_id': cliente_id_odoo, 'commitment_date': fecha_entrega.strftime("%Y-%m-%d"), 'note': observaciones
                         }])
                         
-                        # 3. Crear Línea de Sección (El texto descriptivo libre)
-                        models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [{
-                            'order_id': orden_id, 'display_type': 'line_section', 'name': trabajo              
-                        }])
+                        models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [{'order_id': orden_id, 'display_type': 'line_section', 'name': trabajo}])
                         
-                        # 4. Crear Líneas de Productos (Iteramos sobre la lista dinámica)
                         if st.session_state.articulos_temporales:
                             for art in st.session_state.articulos_temporales:
-                                models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [{
-                                    'order_id': orden_id,
-                                    'product_id': art['id'],
-                                    'product_uom_qty': art['cant']
-                                }])
+                                models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [{'order_id': orden_id, 'product_id': art['id'], 'product_uom_qty': art['cant']}])
                         
-                        # 5. Adjuntar Foto
                         if foto_adjunta is not None:
                             foto_base64 = base64.b64encode(foto_adjunta.read()).decode('utf-8')
-                            models.execute_kw(DB, uid, PASSWORD, 'ir.attachment', 'create', [{
-                                'name': f"Ingreso_{trabajo}.jpg", 'type': 'binary', 'datas': foto_base64,
-                                'res_model': 'sale.order', 'res_id': orden_id         
-                            }])
+                            models.execute_kw(DB, uid, PASSWORD, 'ir.attachment', 'create', [{'name': f"Ingreso_{trabajo}.jpg", 'type': 'binary', 'datas': foto_base64, 'res_model': 'sale.order', 'res_id': orden_id}])
 
-                        # 6. Éxito y QR
                         orden = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'read', [[orden_id]], {'fields': ['name']})
                         
                         qr = qrcode.QRCode(version=1, box_size=10, border=1) 
@@ -262,19 +228,15 @@ with tab1:
                         
                         buf = BytesIO()
                         img_qr.save(buf, format="PNG")
-                        qr_base64_str = base64.b64encode(buf.getvalue()).decode("utf-8")
-                        
                         st.session_state.num_orden_generada = orden[0]['name']
-                        st.session_state.qr_base64 = qr_base64_str
+                        st.session_state.qr_base64 = base64.b64encode(buf.getvalue()).decode("utf-8")
                         st.session_state.nombre_cliente_etiqueta = (cliente_final[:15] + '...') if len(cliente_final) > 15 else cliente_final
                         st.session_state.desc_trabajo_etiqueta = (trabajo[:20] + '...') if len(trabajo) > 20 else trabajo
                         st.session_state.orden_exitosa = True
                         
                         if es_cliente_nuevo: obtener_clientes.clear()
                         st.rerun()
-                                
-                    except Exception as e:
-                        st.error(f"Error: {e}")
+                    except Exception as e: st.error(f"Error: {e}")
 
     # PANTALLA DE IMPRESIÓN Y REINICIO
     else:
@@ -316,21 +278,16 @@ with tab1:
         components.html(html_etiqueta, height=220)
         st.markdown("<br>", unsafe_allow_html=True)
         
-        # Botón para reiniciar (borramos la lista temporal y limpiamos las llaves)
         if st.button("🔄 Cargar un Nuevo Trabajo", type="primary", key="btn_reiniciar"):
             st.session_state.orden_exitosa = False
             st.session_state.num_orden_generada = ""
             st.session_state.qr_base64 = ""
             st.session_state.nombre_cliente_etiqueta = ""
             st.session_state.desc_trabajo_etiqueta = ""
-            st.session_state.articulos_temporales = [] # Vaciamos el carrito
-            
-            # Forzamos la limpieza de las variables escritas en el formulario
+            st.session_state.articulos_temporales = [] 
             keys_to_clear = ['ingreso_emp', 'ingreso_cli', 'ingreso_rs', 'ingreso_tel', 'ingreso_chofer', 'ingreso_desc', 'sel_nuevo_prod', 'cant_nuevo_prod']
             for k in keys_to_clear:
-                if k in st.session_state:
-                    del st.session_state[k]
-                    
+                if k in st.session_state: del st.session_state[k]
             st.rerun()
 
 # ------------------------------------------
@@ -362,8 +319,7 @@ with tab2:
                 
                 if all_ids:
                     ordenes = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search_read', 
-                                                [[['id', 'in', all_ids]]], 
-                                                {'fields': ['id', 'name', 'partner_id'], 'order': 'id desc', 'limit': 50})
+                                                [[['id', 'in', all_ids]]], {'fields': ['id', 'name', 'partner_id'], 'order': 'id desc', 'limit': 50})
                     
                     opciones_ord = {f"{o['name']} - Cliente: {o['partner_id'][1]}": o['id'] for o in ordenes}
                     
@@ -378,7 +334,6 @@ with tab2:
                         for linea in lineas_orden:
                              if linea.get('display_type') == 'line_section' or not linea.get('display_type'):
                                  if linea.get('name'): trabajos_disponibles.append(linea['name'])
-                        
                         if not trabajos_disponibles: trabajos_disponibles = ["Trabajo General de la Orden"]
                         trabajo_a_imputar = st.selectbox("¿A qué trabajo le cargará las horas?", trabajos_disponibles, key="sel_trab_horas")
                                 
@@ -388,7 +343,6 @@ with tab2:
                         colA, colB = st.columns(2)
                         with colA: dia_trabajo = st.date_input("Día del trabajo", value=date.today(), key="dia_horas")
                         with colB: horas_trabajadas = st.number_input("Horas utilizadas", min_value=0.0, step=0.25, value=1.0, key="num_horas")
-                            
                         notas_extra = st.text_area("Notas / Observaciones", key="notas_horas")
                         submit_horas = st.form_submit_button("Guardar Registro", type="primary")
                         
@@ -400,40 +354,69 @@ with tab2:
                                 texto_registro += f"\n👉 Trabajo realizado en: {trabajo_a_imputar}"
                                 if notas_extra: texto_registro += f"\n📝 Notas Técnicas: {notas_extra}"
                                     
-                                models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [{
-                                    'order_id': orden_id, 'display_type': 'line_note', 'name': texto_registro              
-                                }])
+                                models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [{'order_id': orden_id, 'display_type': 'line_note', 'name': texto_registro}])
                                 st.success("✅ ¡Horas anexadas exitosamente a la orden!")
                                 colX, colY, colZ = st.columns([1, 2, 1])
                                 with colY:
                                     try: st.image("exito.jpeg", caption="¡Trabajo Imputado!", use_container_width=True)
                                     except Exception: pass
-                else:
-                    st.warning("No se encontraron órdenes con esa búsqueda.")
-            except Exception as e:
-                st.error(f"Error de conexión: {e}")
+                else: st.warning("No se encontraron órdenes con esa búsqueda.")
+            except Exception as e: st.error(f"Error de conexión: {e}")
 
 # ------------------------------------------
-# MÓDULO 3: EDICIÓN RÁPIDA 
+# MÓDULO 3: EDICIÓN RÁPIDA (CON FILTRO DE COTIZACIONES)
 # ------------------------------------------
 with tab3:
-    st.markdown("### 🔍 Buscar Orden a Editar")
-    busqueda_edit = st.text_input("Ingrese Nro de Orden (Ej: S0045)", key="input_busqueda_edit")
+    st.markdown("### 🔍 Buscar Cotización a Editar")
+    busqueda_edit = st.text_input("Ingrese Cliente o Nro de Orden (Solo pendientes de facturar)", key="input_busqueda_edit")
     
     if busqueda_edit:
-        with st.spinner("Buscando orden..."):
+        with st.spinner("Buscando cotizaciones..."):
             try:
                 common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
                 uid = common.authenticate(DB, USER, PASSWORD, {})
                 models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
                 
-                so_ids = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search', [[['name', 'ilike', busqueda_edit]]])
+                # 1. Buscamos el ID del Cliente (Partner) si escribió un nombre
+                partner_ids = models.execute_kw(DB, uid, PASSWORD, 'res.partner', 'search', [[['name', 'ilike', busqueda_edit]]])
                 
-                if so_ids:
+                # 2. Buscamos órdenes por Nombre (ej. S0045) filtrando solo estado Cotización ('draft', 'sent')
+                domain_name = [['name', 'ilike', busqueda_edit], ['state', 'in', ['draft', 'sent']]]
+                so_ids_name = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search', [domain_name])
+                
+                # 3. Buscamos órdenes por ID de Cliente filtrando solo Cotizaciones
+                so_ids_partner = []
+                if partner_ids:
+                    domain_partner = [['partner_id', 'in', partner_ids], ['state', 'in', ['draft', 'sent']]]
+                    so_ids_partner = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search', [domain_partner])
+                
+                all_ids = list(set(so_ids_name + so_ids_partner))
+                
+                if all_ids:
+                    # Traemos los datos de las órdenes ordenadas por la más reciente
                     ordenes = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search_read', 
-                                                [[['id', 'in', so_ids]]], {'fields': ['id', 'name', 'partner_id']})
+                                                [[['id', 'in', all_ids]]], 
+                                                {'fields': ['id', 'name', 'partner_id', 'date_order', 'amount_total', 'state'], 'order': 'id desc'})
                     
-                    opciones_ord_edit = {f"{o['name']} - Cliente Actual: {o['partner_id'][1]}": o for o in ordenes}
+                    # --- TABLA DINÁMICA VISUAL ---
+                    st.markdown("#### 📋 Cotizaciones Pendientes Encontradas")
+                    datos_tabla = []
+                    for o in ordenes:
+                        estado_texto = "Borrador" if o['state'] == 'draft' else "Enviada"
+                        datos_tabla.append({
+                            "Nro. Orden": o['name'],
+                            "Cliente": o['partner_id'][1] if o['partner_id'] else "Sin cliente",
+                            "Fecha": str(o.get('date_order', ''))[:10],
+                            "Estado": estado_texto,
+                            "Monto": f"${o.get('amount_total', 0):.2f}"
+                        })
+                    
+                    df_ordenes = pd.DataFrame(datos_tabla)
+                    st.dataframe(df_ordenes, use_container_width=True, hide_index=True)
+                    st.markdown("---")
+                    
+                    # --- SELECTOR PARA EDITAR ---
+                    opciones_ord_edit = {f"{o['name']} - Cliente: {o['partner_id'][1]}": o for o in ordenes}
                     
                     with st.container(border=True):
                         orden_seleccionada = st.selectbox("Seleccione la orden a editar:", list(opciones_ord_edit.keys()), key="sel_ord_edit")
@@ -441,14 +424,12 @@ with tab3:
                         orden_id_edit = orden_data['id']
                         
                         st.markdown("---")
-                        
-                        # --- SECCIÓN A: CAMBIAR CLIENTE ---
+                        # SECCIÓN A: CAMBIAR CLIENTE
                         st.markdown("#### 👤 Cambiar Cliente")
                         nuevo_cliente_nombre = st.selectbox("Seleccionar nuevo cliente para esta orden", ["Seleccionar..."] + lista_clientes, key="edit_cli")
                         
                         if st.button("Actualizar Cliente", key="btn_act_cli"):
-                            if nuevo_cliente_nombre == "Seleccionar...":
-                                st.warning("⚠️ Seleccione un cliente válido de la lista.")
+                            if nuevo_cliente_nombre == "Seleccionar...": st.warning("⚠️ Seleccione un cliente válido.")
                             else:
                                 cliente_busqueda = models.execute_kw(DB, uid, PASSWORD, 'res.partner', 'search', [[['name', '=', nuevo_cliente_nombre]]], {'limit': 1})
                                 if cliente_busqueda:
@@ -457,31 +438,23 @@ with tab3:
                                     st.rerun()
                         
                         st.markdown("---")
-                        
-                        # --- SECCIÓN B: AGREGAR ARTÍCULOS ---
+                        # SECCIÓN B: AGREGAR ARTÍCULOS
                         st.markdown("#### 🛒 Agregar Artículo a la Orden")
-                        st.write("Seleccione repuestos o artículos del catálogo de Odoo para sumarlos a este trabajo.")
-                        
                         opciones_prod_edit = ["Seleccionar..."] + list(dict_productos.keys())
                         prod_sel_edit = st.selectbox("Producto / Artículo", opciones_prod_edit, key="sel_prod_edit")
                         
                         col1_edit, col2_edit = st.columns(2)
-                        with col1_edit:
-                            cant_edit = st.number_input("Cantidad", min_value=1.0, step=1.0, value=1.0, key="cant_prod_edit")
+                        with col1_edit: cant_edit = st.number_input("Cantidad", min_value=0.25, step=1.0, value=1.0, key="cant_prod_edit")
                         
                         if st.button("➕ Agregar Artículo", type="primary", key="btn_add_prod_edit"):
-                            if prod_sel_edit == "Seleccionar...":
-                                st.warning("⚠️ Debe seleccionar un producto del catálogo.")
+                            if prod_sel_edit == "Seleccionar...": st.warning("⚠️ Debe seleccionar un producto.")
                             else:
                                 prod_id_edit = dict_productos[prod_sel_edit]
                                 models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [{
-                                    'order_id': orden_id_edit,
-                                    'product_id': prod_id_edit,
-                                    'product_uom_qty': cant_edit
+                                    'order_id': orden_id_edit, 'product_id': prod_id_edit, 'product_uom_qty': cant_edit
                                 }])
                                 st.success(f"✅ Se agregaron {cant_edit} unidades de '{prod_sel_edit}' a la orden.")
                                 
-                else:
-                    st.warning("No se encontró ninguna orden con ese número.")
+                else: st.warning("No se encontró ninguna cotización pendiente con ese cliente o número.")
             except Exception as e:
                 st.error(f"Error de conexión: {e}")
