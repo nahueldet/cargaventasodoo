@@ -97,9 +97,10 @@ def obtener_empleados():
         uid = common.authenticate(DB, USER, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         empleados_data = models.execute_kw(DB, uid, PASSWORD, 'hr.employee', 'search_read', 
-            [], {'fields': ['name'], 'order': 'name asc'})
-        return [e['name'] for e in empleados_data if e['name']]
-    except Exception: return ["Nahuel de Titto", "Taller 1"]
+            [], {'fields': ['id', 'name'], 'order': 'name asc'})
+        # AHORA RETORNA UN DICCIONARIO { 'Nombre': ID } PARA PODER USAR EL ID EN LA HOJA DE HORAS
+        return {e['name']: e['id'] for e in empleados_data}
+    except Exception: return {"Nahuel de Titto": 1, "Taller 1": 2}
 
 @st.cache_data(ttl=300)
 def obtener_productos():
@@ -115,16 +116,17 @@ def obtener_productos():
 
 with st.spinner("Sincronizando base de datos..."):
     lista_clientes = obtener_clientes()
-    lista_empleados = obtener_empleados()
+    dict_empleados = obtener_empleados()
     dict_productos = obtener_productos()
 
 opciones_clientes = ["Seleccionar...", "➕ CREAR NUEVO CLIENTE"] + lista_clientes
-opciones_empleados = ["Seleccionar..."] + lista_empleados
+opciones_empleados = ["Seleccionar..."] + list(dict_empleados.keys())
+opciones_prod = ["(Ninguno - Solo texto)"] + list(dict_productos.keys())
 
 # ==========================================
-# PESTAÑAS (MÓDULOS) AHORA SON 4
+# PESTAÑAS (MÓDULOS)
 # ==========================================
-tab1, tab2, tab3, tab4 = st.tabs(["📦 Ingreso", "⏱️ Horas", "✏️ Editar Orden", "⚡ Electroerosión"])
+tab1, tab2, tab3, tab4 = st.tabs(["📦 Ingreso", "⏱️ Horas General", "✏️ Editar", "⚡ Electroerosión"])
 
 # ------------------------------------------
 # MÓDULO 1: INGRESO DE MATERIAL 
@@ -290,7 +292,7 @@ with tab1:
             st.rerun()
 
 # ------------------------------------------
-# MÓDULO 2: CARGA DE HORAS Y NOTAS
+# MÓDULO 2: CARGA DE HORAS GENERAL
 # ------------------------------------------
 with tab2:
     st.markdown("### 🔍 Buscar Orden")
@@ -306,8 +308,8 @@ with tab2:
                 uid = common.authenticate(DB, USER, PASSWORD, {})
                 models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
                 
-                # FILTROS DE LA CAPTURA DE ODOO
-                filtros_activos = [['invoice_status', '!=', 'invoiced'], ['locked', '=', False]]
+                # FILTROS DE LA CAPTURA DE ODOO (Incluye state != cancel)
+                filtros_activos = [['invoice_status', '!=', 'invoiced'], ['locked', '=', False], ['state', '!=', 'cancel']]
                 
                 so_ids_name = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search', [[['name', 'ilike', busqueda]] + filtros_activos])
                 partner_ids = models.execute_kw(DB, uid, PASSWORD, 'res.partner', 'search', [[['name', 'ilike', busqueda]]])
@@ -344,7 +346,7 @@ with tab2:
                             trabajo_a_imputar = st.selectbox("¿A qué trabajo le cargará las horas?", trabajos_disponibles, key="sel_trab_horas")
                                     
                         st.markdown("### ⏱ Registrar Avance")
-                        with st.form("form_horas", clear_on_submit=True):
+                        with st.form("form_horas_gen", clear_on_submit=True):
                             tec = st.selectbox("Técnico", opciones_empleados, key="tec_horas")
                             colA, colB = st.columns(2)
                             with colA: dia_trabajo = st.date_input("Día del trabajo", value=date.today(), key="dia_horas")
@@ -367,17 +369,17 @@ with tab2:
                                         try: st.image("exito.jpeg", caption="¡Trabajo Imputado!", use_container_width=True)
                                         except Exception: pass
                     else:
-                        st.warning("No se encontraron órdenes abiertas (están facturadas o bloqueadas).")
+                        st.warning("No se encontraron órdenes abiertas (están facturadas, bloqueadas o canceladas).")
                 else: st.warning("No se encontraron órdenes con esa búsqueda.")
             except Exception as e:
                 st.error(f"Error de conexión: {e}")
 
 # ------------------------------------------
-# MÓDULO 3: EDICIÓN RÁPIDA (CON FILTRO CORRECTO ODOO)
+# MÓDULO 3: EDICIÓN RÁPIDA 
 # ------------------------------------------
 with tab3:
     st.markdown("### 🔍 Buscar Cotización / Orden a Editar")
-    busqueda_edit = st.text_input("Ingrese Cliente o Nro de Orden (Solo NO Facturadas y NO Bloqueadas)", key="input_busqueda_edit")
+    busqueda_edit = st.text_input("Ingrese Cliente o Nro de Orden (Solo Activas)", key="input_busqueda_edit")
     
     if busqueda_edit:
         with st.spinner("Buscando órdenes pendientes..."):
@@ -386,8 +388,7 @@ with tab3:
                 uid = common.authenticate(DB, USER, PASSWORD, {})
                 models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
                 
-                # FILTROS ESTRICTOS
-                filtros_activos = [['invoice_status', '!=', 'invoiced'], ['locked', '=', False]]
+                filtros_activos = [['invoice_status', '!=', 'invoiced'], ['locked', '=', False], ['state', '!=', 'cancel']]
                 
                 partner_ids = models.execute_kw(DB, uid, PASSWORD, 'res.partner', 'search', [[['name', 'ilike', busqueda_edit]]])
                 
@@ -413,12 +414,9 @@ with tab3:
                     dict_detalles = {}
                     for l in lineas_resumen:
                         o_id = l['order_id'][0]
-                        if o_id not in dict_detalles:
-                            dict_detalles[o_id] = []
-                        if l['display_type'] == 'line_section' and l['name']:
-                            dict_detalles[o_id].append(l['name'])
-                        elif not l['display_type'] and l['name']: 
-                            dict_detalles[o_id].append(l['name'].split('\n')[0]) 
+                        if o_id not in dict_detalles: dict_detalles[o_id] = []
+                        if l['display_type'] == 'line_section' and l['name']: dict_detalles[o_id].append(l['name'])
+                        elif not l['display_type'] and l['name']: dict_detalles[o_id].append(l['name'].split('\n')[0]) 
 
                     st.markdown("#### 📋 Órdenes Pendientes")
                     datos_tabla = []
@@ -459,29 +457,21 @@ with tab3:
                         with st.form("form_editar_lineas"):
                             lineas_modificadas = []
                             for linea in lineas_completas:
-                                if linea['display_type'] == 'line_section':
-                                    tipo_txt, color = "🔹 SECCIÓN / TRABAJO", "#6a1b9a"
-                                elif linea['display_type'] == 'line_note':
-                                    tipo_txt, color = "📝 NOTA / HORAS", "#e65100"
-                                else:
-                                    tipo_txt, color = "🛒 ARTÍCULO / REPUESTO", "#1565c0"
+                                if linea['display_type'] == 'line_section': tipo_txt, color = "🔹 SECCIÓN / TRABAJO", "#6a1b9a"
+                                elif linea['display_type'] == 'line_note': tipo_txt, color = "📝 NOTA / HORAS", "#e65100"
+                                else: tipo_txt, color = "🛒 ARTÍCULO / REPUESTO", "#1565c0"
 
                                 st.markdown(f"<p style='color:{color}; font-size:12px; font-weight:bold; margin-bottom:0;'>{tipo_txt}</p>", unsafe_allow_html=True)
                                 col_desc, col_cant = st.columns([4, 1])
-                                with col_desc:
-                                    new_name = st.text_area("Descripción", value=linea['name'], key=f"desc_{linea['id']}", label_visibility="collapsed")
+                                with col_desc: new_name = st.text_area("Descripción", value=linea['name'], key=f"desc_{linea['id']}", label_visibility="collapsed")
                                 with col_cant:
-                                    if not linea['display_type']: 
-                                        new_qty = st.number_input("Cant", value=float(linea['product_uom_qty']), key=f"cant_{linea['id']}", label_visibility="collapsed")
-                                    else:
-                                        new_qty = False
+                                    if not linea['display_type']: new_qty = st.number_input("Cant", value=float(linea['product_uom_qty']), key=f"cant_{linea['id']}", label_visibility="collapsed")
+                                    else: new_qty = False
                                 
                                 st.markdown("<hr style='margin-top:5px; margin-bottom:15px;'>", unsafe_allow_html=True)
                                 lineas_modificadas.append({
                                     'id': linea['id'], 'old_name': linea['name'], 'new_name': new_name,
-                                    'is_product': not linea['display_type'],
-                                    'old_qty': float(linea['product_uom_qty']) if not linea['display_type'] else False,
-                                    'new_qty': new_qty
+                                    'is_product': not linea['display_type'], 'old_qty': float(linea['product_uom_qty']) if not linea['display_type'] else False, 'new_qty': new_qty
                                 })
 
                             submit_lineas = st.form_submit_button("💾 Guardar Cambios", type="primary")
@@ -535,13 +525,12 @@ with tab3:
                 st.error(f"Error de conexión: {e}")
 
 # ------------------------------------------
-# MÓDULO 4: TABLERO DE ELECTROEROSIÓN (NUEVO)
+# MÓDULO 4: TABLERO DE ELECTROEROSIÓN + CARGA HORAS EN TIMESHEET
 # ------------------------------------------
 with tab4:
     st.markdown("### ⚡ Panel de Control - Corte por Hilo")
-    st.write("Listado de trabajos activos que requieren servicio de electroerosión.")
+    st.write("Trabajos activos que requieren servicio de electroerosión.")
     
-    # Botón para actualizar manualmente la vista de la máquina
     if st.button("🔄 Actualizar Tablero", key="btn_refresh_edm"):
         st.rerun()
         
@@ -551,18 +540,15 @@ with tab4:
             uid = common.authenticate(DB, USER, PASSWORD, {})
             models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
             
-            # 1. Buscamos todas las líneas de orden que contengan "CORTE POR HILO" en el nombre del producto o descripción.
-            # Lo hacemos flexible con 'ilike' por si en algún momento se escribe en minúscula o varía un poco.
             lineas_hilo = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', 
                                            [[['name', 'ilike', 'CORTE POR HILO']]], 
                                            {'fields': ['order_id']})
             
-            # Extraemos los IDs de las órdenes que tienen ese artículo
             order_ids_hilo = list(set([l['order_id'][0] for l in lineas_hilo if l.get('order_id')]))
             
             if order_ids_hilo:
-                # 2. Aplicamos los filtros de NO Facturado y NO Bloqueado que pidió administración[cite: 2]
-                filtros_activos = [['invoice_status', '!=', 'invoiced'], ['locked', '=', False]]
+                # SE AGREGA EL FILTRO PARA ORDENES CANCELADAS (state != cancel)[cite: 2]
+                filtros_activos = [['invoice_status', '!=', 'invoiced'], ['locked', '=', False], ['state', '!=', 'cancel']]
                 domain_edm = [['id', 'in', order_ids_hilo]] + filtros_activos
                 
                 ordenes_edm = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search_read', 
@@ -570,7 +556,6 @@ with tab4:
                                                 {'fields': ['id', 'name', 'partner_id', 'date_order', 'amount_total', 'state'], 'order': 'date_order desc'})
                 
                 if ordenes_edm:
-                    # Traemos los detalles para que el operario vea en la tabla qué hay que hacer
                     ordenes_ids = [o['id'] for o in ordenes_edm]
                     lineas_resumen = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', 
                                                      [[['order_id', 'in', ordenes_ids]]], 
@@ -579,14 +564,10 @@ with tab4:
                     dict_detalles = {}
                     for l in lineas_resumen:
                         o_id = l['order_id'][0]
-                        if o_id not in dict_detalles:
-                            dict_detalles[o_id] = []
-                        if l['display_type'] == 'line_section' and l['name']:
-                            dict_detalles[o_id].append(l['name'])
-                        elif not l['display_type'] and l['name']: 
-                            dict_detalles[o_id].append(l['name'].split('\n')[0]) 
+                        if o_id not in dict_detalles: dict_detalles[o_id] = []
+                        if l['display_type'] == 'line_section' and l['name']: dict_detalles[o_id].append(l['name'])
+                        elif not l['display_type'] and l['name']: dict_detalles[o_id].append(l['name'].split('\n')[0]) 
 
-                    # Armamos la tabla dinámica para EDM
                     datos_tabla_edm = []
                     for o in ordenes_edm:
                         estado_texto = "Borrador" if o['state'] in ['draft', 'sent'] else "Orden de Venta"
@@ -603,6 +584,75 @@ with tab4:
                     
                     df_edm = pd.DataFrame(datos_tabla_edm)
                     st.dataframe(df_edm, use_container_width=True, hide_index=True)
+                    st.markdown("---")
+                    
+                    # --- CARGA DIRECTA DE HORAS EN HOJA DE HORAS (TIMESHEETS) ---
+                    st.markdown("#### ⏱️ Registrar Horas en Electroerosión")
+                    st.write("Seleccione la orden para enviar las horas directo a la hoja de horas del servicio.")
+                    
+                    opciones_ord_edm = {f"{o['name']} - Cliente: {o['partner_id'][1]}": o['id'] for o in ordenes_edm}
+                    
+                    with st.container(border=True):
+                        orden_seleccionada_edm = st.selectbox("Seleccione la orden a imputar:", list(opciones_ord_edm.keys()), key="sel_ord_edm")
+                        orden_id_edm = opciones_ord_edm[orden_seleccionada_edm]
+                        
+                        with st.form("form_horas_edm", clear_on_submit=True):
+                            tec_edm = st.selectbox("Operario", opciones_empleados, key="tec_edm")
+                            
+                            colA_edm, colB_edm = st.columns(2)
+                            with colA_edm: dia_trabajo_edm = st.date_input("Día del trabajo", value=date.today(), key="dia_edm")
+                            with colB_edm: horas_trabajadas_edm = st.number_input("Tiempo utilizado (Hs)", min_value=0.0, step=0.25, value=1.0, key="num_horas_edm")
+                            
+                            notas_extra_edm = st.text_area("Descripción / Notas", key="notas_edm")
+                            submit_horas_edm = st.form_submit_button("Imputar en Hoja de Horas", type="primary")
+                            
+                            if submit_horas_edm:
+                                if tec_edm == "Seleccionar...": st.error("⚠️ Seleccione al operario.")
+                                elif horas_trabajadas_edm <= 0: st.error("⚠️ El tiempo debe ser mayor a 0.")
+                                else:
+                                    try:
+                                        # 1. Obtenemos el ID exacto de la línea del artículo "CORTE POR HILO" de esta orden
+                                        linea_hilo = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', 
+                                            [[['order_id', '=', orden_id_edm], ['name', 'ilike', 'CORTE POR HILO']]], 
+                                            {'fields': ['id', 'project_id', 'task_id'], 'limit': 1})
+                                        
+                                        if linea_hilo:
+                                            l_id = linea_hilo[0]['id']
+                                            empleado_id = dict_empleados[tec_edm] # Pasamos el Nombre a ID de Odoo
+                                            
+                                            desc_ts = f"EDM: {notas_extra_edm}" if notas_extra_edm else "Trabajo de Electroerosión"
+                                            
+                                            ts_vals = {
+                                                'name': desc_ts,
+                                                'employee_id': empleado_id,
+                                                'unit_amount': horas_trabajadas_edm,
+                                                'so_line': l_id,
+                                                'date': dia_trabajo_edm.strftime("%Y-%m-%d")
+                                            }
+                                            
+                                            # Si Odoo generó un Proyecto o Tarea para este servicio, lo asociamos para evitar errores
+                                            if linea_hilo[0].get('project_id'): ts_vals['project_id'] = linea_hilo[0]['project_id'][0]
+                                            if linea_hilo[0].get('task_id'): ts_vals['task_id'] = linea_hilo[0]['task_id'][0]
+                                                
+                                            # Inyectamos en la Hoja de Horas (Timesheets / account.analytic.line)
+                                            models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'create', [ts_vals])
+                                            st.success("✅ ¡Horas imputadas directamente a la hoja de horas analítica del servicio!")
+                                            
+                                            colX, colY, colZ = st.columns([1, 2, 1])
+                                            with colY:
+                                                try: st.image("exito.jpeg", caption="¡Horas Guardadas!", use_container_width=True)
+                                                except Exception: pass
+                                                
+                                        else:
+                                            st.warning("⚠️ No se encontró la línea exacta del servicio en la orden. Revise la facturación.")
+                                            
+                                    except Exception as e:
+                                        # PARACAÍDAS (Fallback): Si tu Odoo no tiene el módulo de Partes de Horas activo o configurado, 
+                                        # lo guarda como una nota normal en la orden para que el trabajo no se pierda.
+                                        texto_registro = f"⏱️ HORAS EDM ({tec_edm}): {horas_trabajadas_edm} hs | Fecha: {dia_trabajo_edm.strftime('%d/%m/%Y')}"
+                                        if notas_extra_edm: texto_registro += f"\n📝 Notas: {notas_extra_edm}"
+                                        models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [{'order_id': orden_id_edm, 'display_type': 'line_note', 'name': texto_registro}])
+                                        st.success("✅ ¡Horas anexadas como nota a la orden de venta!")
                 else:
                     st.success("✅ Al día. No hay órdenes activas de corte por hilo pendientes en este momento.")
             else:
