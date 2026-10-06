@@ -120,7 +120,6 @@ with st.spinner("Sincronizando base de datos..."):
 
 opciones_clientes = ["Seleccionar...", "➕ CREAR NUEVO CLIENTE"] + lista_clientes
 opciones_empleados = ["Seleccionar..."] + lista_empleados
-opciones_prod = ["(Ninguno - Solo texto)"] + list(dict_productos.keys())
 
 # ==========================================
 # PESTAÑAS (MÓDULOS)
@@ -307,85 +306,99 @@ with tab2:
                 uid = common.authenticate(DB, USER, PASSWORD, {})
                 models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
                 
-                so_ids_name = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search', [[['name', 'ilike', busqueda]]])
-                lineas = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', [[['name', 'ilike', busqueda]]], {'fields': ['order_id']})
-                line_so_ids = [line['order_id'][0] for line in lineas if line.get('order_id')]
+                # FILTROS DE LA CAPTURA DE ODOO
+                filtros_activos = [['invoice_status', '!=', 'invoiced'], ['locked', '=', False]]
+                
+                so_ids_name = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search', [[['name', 'ilike', busqueda]] + filtros_activos])
                 partner_ids = models.execute_kw(DB, uid, PASSWORD, 'res.partner', 'search', [[['name', 'ilike', busqueda]]])
                 so_ids_partner = []
                 if partner_ids:
-                    so_ids_partner = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search', [[['partner_id', 'in', partner_ids]]])
+                    so_ids_partner = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search', [[['partner_id', 'in', partner_ids]] + filtros_activos])
                 
-                all_ids = list(set(so_ids_name + line_so_ids + so_ids_partner))
+                # Busqueda en lineas (requiere extraer order_id)
+                lineas = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', [[['name', 'ilike', busqueda]]], {'fields': ['order_id']})
+                line_so_ids_crudos = [line['order_id'][0] for line in lineas if line.get('order_id')]
                 
-                if all_ids:
+                # Juntamos IDs crudos
+                all_ids_crudos = list(set(so_ids_name + line_so_ids_crudos + so_ids_partner))
+                
+                if all_ids_crudos:
+                    # Traemos las órdenes que coinciden con los IDs, pero RE-FILTRAMOS para asegurar que no estén facturadas/bloqueadas
                     ordenes = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search_read', 
-                                                [[['id', 'in', all_ids]]], {'fields': ['id', 'name', 'partner_id'], 'order': 'id desc', 'limit': 50})
+                                                [[['id', 'in', all_ids_crudos]] + filtros_activos], 
+                                                {'fields': ['id', 'name', 'partner_id'], 'order': 'id desc', 'limit': 50})
                     
-                    opciones_ord = {f"{o['name']} - Cliente: {o['partner_id'][1]}": o['id'] for o in ordenes}
-                    
-                    with st.container(border=True):
-                        orden_seleccionada = st.selectbox("Seleccione la orden:", list(opciones_ord.keys()), key="sel_ord_horas")
-                        orden_id = opciones_ord[orden_seleccionada]
+                    if ordenes:
+                        opciones_ord = {f"{o['name']} - Cliente: {o['partner_id'][1]}": o['id'] for o in ordenes}
                         
-                        lineas_orden = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', 
-                                                         [[['order_id', '=', orden_id]]], {'fields': ['name', 'display_type']})
-                        
-                        trabajos_disponibles = []
-                        for linea in lineas_orden:
-                             if linea.get('display_type') == 'line_section' or not linea.get('display_type'):
-                                 if linea.get('name'): trabajos_disponibles.append(linea['name'])
-                        if not trabajos_disponibles: trabajos_disponibles = ["Trabajo General de la Orden"]
-                        trabajo_a_imputar = st.selectbox("¿A qué trabajo le cargará las horas?", trabajos_disponibles, key="sel_trab_horas")
-                                
-                    st.markdown("### ⏱️️ Registrar Avance")
-                    with st.form("form_horas", clear_on_submit=True):
-                        tec = st.selectbox("Técnico", opciones_empleados, key="tec_horas")
-                        colA, colB = st.columns(2)
-                        with colA: dia_trabajo = st.date_input("Día del trabajo", value=date.today(), key="dia_horas")
-                        with colB: horas_trabajadas = st.number_input("Horas utilizadas", min_value=0.0, step=0.25, value=1.0, key="num_horas")
-                        notas_extra = st.text_area("Notas / Observaciones", key="notas_horas")
-                        submit_horas = st.form_submit_button("Guardar Registro", type="primary")
-                        
-                        if submit_horas:
-                            if tec == "Seleccionar...": st.error("⚠️ Seleccione al técnico.")
-                            elif horas_trabajadas <= 0: st.error("⚠️ Las horas deben ser mayor a 0.")
-                            else:
-                                texto_registro = f"⏱️ HORAS ({tec}): {horas_trabajadas} hs | Fecha: {dia_trabajo.strftime('%d/%m/%Y')}"
-                                texto_registro += f"\n👉 Trabajo realizado en: {trabajo_a_imputar}"
-                                if notas_extra: texto_registro += f"\n📝 Notas Técnicas: {notas_extra}"
+                        with st.container(border=True):
+                            orden_seleccionada = st.selectbox("Seleccione la orden:", list(opciones_ord.keys()), key="sel_ord_horas")
+                            orden_id = opciones_ord[orden_seleccionada]
+                            
+                            lineas_orden = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', 
+                                                             [[['order_id', '=', orden_id]]], {'fields': ['name', 'display_type']})
+                            
+                            trabajos_disponibles = []
+                            for linea in lineas_orden:
+                                 if linea.get('display_type') == 'line_section' or not linea.get('display_type'):
+                                     if linea.get('name'): trabajos_disponibles.append(linea['name'])
+                            if not trabajos_disponibles: trabajos_disponibles = ["Trabajo General de la Orden"]
+                            trabajo_a_imputar = st.selectbox("¿A qué trabajo le cargará las horas?", trabajos_disponibles, key="sel_trab_horas")
                                     
-                                models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [{'order_id': orden_id, 'display_type': 'line_note', 'name': texto_registro}])
-                                st.success("✅ ¡Horas anexadas exitosamente a la orden!")
-                                colX, colY, colZ = st.columns([1, 2, 1])
-                                with colY:
-                                    try: st.image("exito.jpeg", caption="¡Trabajo Imputado!", use_container_width=True)
-                                    except Exception: pass
+                        st.markdown("### ⏱ Registrar Avance")
+                        with st.form("form_horas", clear_on_submit=True):
+                            tec = st.selectbox("Técnico", opciones_empleados, key="tec_horas")
+                            colA, colB = st.columns(2)
+                            with colA: dia_trabajo = st.date_input("Día del trabajo", value=date.today(), key="dia_horas")
+                            with colB: horas_trabajadas = st.number_input("Horas utilizadas", min_value=0.0, step=0.25, value=1.0, key="num_horas")
+                            notas_extra = st.text_area("Notas / Observaciones", key="notas_horas")
+                            submit_horas = st.form_submit_button("Guardar Registro", type="primary")
+                            
+                            if submit_horas:
+                                if tec == "Seleccionar...": st.error("⚠️ Seleccione al técnico.")
+                                elif horas_trabajadas <= 0: st.error("⚠️ Las horas deben ser mayor a 0.")
+                                else:
+                                    texto_registro = f"⏱️ HORAS ({tec}): {horas_trabajadas} hs | Fecha: {dia_trabajo.strftime('%d/%m/%Y')}"
+                                    texto_registro += f"\n👉 Trabajo realizado en: {trabajo_a_imputar}"
+                                    if notas_extra: texto_registro += f"\n📝 Notas Técnicas: {notas_extra}"
+                                        
+                                    models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [{'order_id': orden_id, 'display_type': 'line_note', 'name': texto_registro}])
+                                    st.success("✅ ¡Horas anexadas exitosamente a la orden!")
+                                    colX, colY, colZ = st.columns([1, 2, 1])
+                                    with colY:
+                                        try: st.image("exito.jpeg", caption="¡Trabajo Imputado!", use_container_width=True)
+                                        except Exception: pass
+                    else:
+                        st.warning("No se encontraron órdenes abiertas (están facturadas o bloqueadas).")
                 else: st.warning("No se encontraron órdenes con esa búsqueda.")
             except Exception as e:
                 st.error(f"Error de conexión: {e}")
 
 # ------------------------------------------
-# MÓDULO 3: EDICIÓN RÁPIDA (CON DETALLE COMPLETO)
+# MÓDULO 3: EDICIÓN RÁPIDA (CON FILTRO CORRECTO ODOO)
 # ------------------------------------------
 with tab3:
-    st.markdown("### 🔍 Buscar Cotización a Editar")
-    busqueda_edit = st.text_input("Ingrese Cliente o Nro de Orden (Cotizaciones Pendientes)", key="input_busqueda_edit")
+    st.markdown("### 🔍 Buscar Cotización / Orden a Editar")
+    busqueda_edit = st.text_input("Ingrese Cliente o Nro de Orden (Solo NO Facturadas y NO Bloqueadas)", key="input_busqueda_edit")
     
     if busqueda_edit:
-        with st.spinner("Buscando cotizaciones..."):
+        with st.spinner("Buscando órdenes pendientes..."):
             try:
                 common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
                 uid = common.authenticate(DB, USER, PASSWORD, {})
                 models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
                 
-                # Búsquedas filtradas por estado
+                # FILTROS ESTRICTOS DE LA CAPTURA DE PANTALLA
+                filtros_activos = [['invoice_status', '!=', 'invoiced'], ['locked', '=', False]]
+                
                 partner_ids = models.execute_kw(DB, uid, PASSWORD, 'res.partner', 'search', [[['name', 'ilike', busqueda_edit]]])
-                domain_name = [['name', 'ilike', busqueda_edit], ['state', 'in', ['draft', 'sent']]]
+                
+                domain_name = [['name', 'ilike', busqueda_edit]] + filtros_activos
                 so_ids_name = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search', [domain_name])
                 
                 so_ids_partner = []
                 if partner_ids:
-                    domain_partner = [['partner_id', 'in', partner_ids], ['state', 'in', ['draft', 'sent']]]
+                    domain_partner = [['partner_id', 'in', partner_ids]] + filtros_activos
                     so_ids_partner = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search', [domain_partner])
                 
                 all_ids = list(set(so_ids_name + so_ids_partner))
@@ -406,17 +419,16 @@ with tab3:
                         if o_id not in dict_detalles:
                             dict_detalles[o_id] = []
                         
-                        # Extraer secciones o la primera línea de los productos
                         if l['display_type'] == 'line_section' and l['name']:
                             dict_detalles[o_id].append(l['name'])
                         elif not l['display_type'] and l['name']: 
                             dict_detalles[o_id].append(l['name'].split('\n')[0]) 
 
                     # 2. Armar la Tabla Dinámica
-                    st.markdown("#### 📋 Cotizaciones Pendientes")
+                    st.markdown("#### 📋 Órdenes Pendientes")
                     datos_tabla = []
                     for o in ordenes:
-                        estado_texto = "Borrador" if o['state'] == 'draft' else "Enviada"
+                        estado_texto = "Borrador" if o['state'] in ['draft', 'sent'] else "Orden de Venta"
                         detalles_lista = dict_detalles.get(o['id'], [])
                         detalle_texto = " | ".join(detalles_lista) if detalles_lista else "Sin detalle"
                         if len(detalle_texto) > 60:
@@ -446,7 +458,7 @@ with tab3:
                         
                         st.markdown("---")
                         
-                        # --- SECCIÓN A: EDITAR LÍNEAS COMPLETAS (NUEVO) ---
+                        # --- SECCIÓN A: EDITAR LÍNEAS COMPLETAS ---
                         st.markdown("#### 📝 Editar Detalle de la Orden")
                         st.write("Modifique textos o cantidades de los trabajos y repuestos cargados.")
                         
@@ -470,7 +482,7 @@ with tab3:
                                 with col_desc:
                                     new_name = st.text_area("Descripción", value=linea['name'], key=f"desc_{linea['id']}", label_visibility="collapsed")
                                 with col_cant:
-                                    if not linea['display_type']: # Si es un producto facturable, dejamos editar cantidad
+                                    if not linea['display_type']: 
                                         new_qty = st.number_input("Cant", value=float(linea['product_uom_qty']), key=f"cant_{linea['id']}", label_visibility="collapsed")
                                     else:
                                         new_qty = False
@@ -542,6 +554,6 @@ with tab3:
                                 st.success(f"✅ Se agregaron {cant_edit} unidades de '{prod_sel_edit}' a la orden.")
                                 st.rerun()
                                 
-                else: st.warning("No se encontró ninguna cotización pendiente con ese cliente o número.")
+                else: st.warning("No se encontró ninguna orden pendiente con ese cliente o número.")
             except Exception as e:
                 st.error(f"Error de conexión: {e}")
