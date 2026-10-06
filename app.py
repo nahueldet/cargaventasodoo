@@ -122,7 +122,7 @@ opciones_clientes = ["Seleccionar...", "➕ CREAR NUEVO CLIENTE"] + lista_client
 opciones_empleados = ["Seleccionar..."] + list(dict_empleados.keys())
 
 # ==========================================
-# PESTAÑAS (MÓDULOS) - AHORA 6 TABS
+# PESTAÑAS (MÓDULOS)
 # ==========================================
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📦 Ingreso", "⏱️ Horas General", "✏️ Editar", "⚡ Electroerosión", "💥 Corte Láser", "📅 Planificador"])
 
@@ -755,7 +755,7 @@ with tab5:
                                 submit_horas_laser = st.form_submit_button("💾 Imputar Horas", type="primary")
                                 
                                 if submit_horas_laser:
-                                    if tec_laser == "Seleccionar...": st.error("⚠️️ Seleccione al operario.")
+                                    if tec_laser == "Seleccionar...": st.error("⚠️ Seleccione al operario.")
                                     elif horas_trabajadas_laser <= 0: st.error("⚠️ El tiempo debe ser mayor a 0.")
                                     else:
                                         try:
@@ -803,7 +803,7 @@ with tab5:
                                         st.success("✅ ¡Trabajo Finalizado! Limpiando tablero...")
                                         st.rerun()
                                     else:
-                                        st.warning("⚠️ El servicio ya fue marcado como hecho o no se encuentra.")
+                                        st.warning("⚠️️ El servicio ya fue marcado como hecho o no se encuentra.")
                                         
                 else:
                     st.success("✅ Al día. No hay órdenes activas de corte láser pendientes en este momento.")
@@ -814,7 +814,7 @@ with tab5:
             st.error(f"Error de conexión: {e}")
 
 # ------------------------------------------
-# MÓDULO 6: PLANIFICADOR DIARIO Y PRIORIDADES (NUEVO)
+# MÓDULO 6: PLANIFICADOR DIARIO Y PRIORIDADES
 # ------------------------------------------
 with tab6:
     st.markdown("### 📅 Planificador Diario y Prioridades")
@@ -830,14 +830,15 @@ with tab6:
             models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
             
             filtros_activos = [['invoice_status', '!=', 'invoiced'], ['locked', '=', False], ['state', '!=', 'cancel']]
+            # Solicitamos campos seguros de sale.order (sin priority)
             ordenes_plan = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search_read', 
                                             [filtros_activos], 
-                                            {'fields': ['id', 'name', 'partner_id', 'commitment_date', 'amount_total', 'state', 'priority'], 'order': 'commitment_date asc'})
+                                            {'fields': ['id', 'name', 'partner_id', 'commitment_date', 'amount_total', 'state', 'note'], 'order': 'commitment_date asc'})
             
             if ordenes_plan:
-                # Métricas / Gráficos modernos superiores
                 total_activas = len(ordenes_plan)
-                urgentes = sum(1 for o in ordenes_plan if o.get('priority') == '1' or o.get('priority') == 'True')
+                # Evaluamos urgencia basándonos en la etiqueta [URGENTE] dentro de la nota
+                urgentes = sum(1 for o in ordenes_plan if o.get('note') and '[URGENTE]' in str(o.get('note')))
                 hoy_str = date.today().strftime("%Y-%m-%d")
                 para_hoy = sum(1 for o in ordenes_plan if str(o.get('commitment_date', ''))[:10] == hoy_str)
                 
@@ -850,15 +851,12 @@ with tab6:
                 st.markdown("#### 🛠️ Cola de Prioridades (Vista de Taller)")
                 st.info("Los técnicos pueden revisar esta lista para saber el orden exacto de los trabajos.")
                 
-                # Preparamos datos para la tabla interactiva
                 datos_plan = []
                 for o in ordenes_plan:
-                    prio_actual = o.get('priority', '0')
-                    # Mapeo amigable para prioridades de Odoo si es string o booleano
-                    prio_texto = "🔥 Urgente" if prio_actual in ['1', 'True', 1] else "⭐ Normal"
+                    es_urgente = o.get('note') and '[URGENTE]' in str(o.get('note'))
+                    prio_texto = "🔥 Urgente" if es_urgente else "⭐ Normal"
                     
                     datos_plan.append({
-                        "ID": o['id'],
                         "Orden": o['name'],
                         "Cliente": o['partner_id'][1] if o['partner_id'] else "Sin cliente",
                         "Entrega": str(o.get('commitment_date', 'Sin fecha'))[:10],
@@ -867,24 +865,32 @@ with tab6:
                     })
                 
                 df_plan = pd.DataFrame(datos_plan)
-                
-                # Mostramos una tabla limpia y ordenada para el taller
-                st.dataframe(df_plan[["Orden", "Cliente", "Entrega", "Prioridad", "Monto"]], use_container_width=True, hide_index=True)
+                st.dataframe(df_plan, use_container_width=True, hide_index=True)
                 
                 st.markdown("---")
-                st.markdown("#### ✏️ Cambiar Prioridad de una Orden")
+                st.markdown("#### ✏️ Marcar Orden como Urgente / Normal")
                 
-                opciones_ord_plan = {f"{o['name']} - {o['partner_id'][1]}": o['id'] for o in ordenes_plan}
+                opciones_ord_plan = {f"{o['name']} - {o['partner_id'][1]}": o for o in ordenes_plan}
                 with st.container(border=True):
                     sel_orden_prio = st.selectbox("Seleccionar orden para reasignar prioridad", list(opciones_ord_plan.keys()), key="sel_prio_ord")
-                    nuevo_nivel = st.selectbox("Nueva Prioridad", ["⭐ Normal (0)", "🔥 Urgente (1)"], key="sel_prio_val")
+                    orden_sel_data = opciones_ord_plan[sel_orden_prio]
+                    
+                    nueva_prio = st.selectbox("Estado de Prioridad", ["⭐ Normal", "🔥 Urgente"], key="sel_prio_val")
                     
                     if st.button("💾 Actualizar Prioridad en Odoo", type="primary", key="btn_save_prio"):
-                        id_a_cambiar = opciones_ord_plan[sel_orden_prio]
-                        val_odoo = '1' if "Urgente" in nuevo_nivel else '0'
+                        id_a_cambiar = orden_sel_data['id']
+                        nota_actual = str(orden_sel_data.get('note') or '')
+                        
+                        # Limpiamos marcas previas si existen para evitar duplicados
+                        nota_limpia = nota_actual.replace("[URGENTE]", "").strip()
+                        
+                        if "Urgente" in nueva_prio:
+                            nueva_nota = f"[URGENTE] {nota_limpia}".strip()
+                        else:
+                            nueva_nota = nota_limpia
                         
                         try:
-                            models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'write', [[id_a_cambiar], {'priority': val_odoo}])
+                            models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'write', [[id_a_cambiar], {'note': nueva_nota}])
                             st.success("✅ ¡Prioridad actualizada con éxito en el sistema!")
                             st.rerun()
                         except Exception as err:
