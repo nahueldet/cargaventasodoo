@@ -149,7 +149,7 @@ with tab1:
             else:
                 cliente_final = cliente_seleccionado
 
-        st.markdown("### ⚙️️ Especificaciones")
+        st.markdown("### ⚙ Especificaciones")
         with st.container(border=True):
             col1, col2 = st.columns(2)
             with col1: persona_deja_trabajo = st.text_input("Traído por (Chofer)", key="ingreso_chofer")
@@ -337,7 +337,7 @@ with tab2:
                         if not trabajos_disponibles: trabajos_disponibles = ["Trabajo General de la Orden"]
                         trabajo_a_imputar = st.selectbox("¿A qué trabajo le cargará las horas?", trabajos_disponibles, key="sel_trab_horas")
                                 
-                    st.markdown("### ⏱️ Registrar Avance")
+                    st.markdown("### ⏱️️ Registrar Avance")
                     with st.form("form_horas", clear_on_submit=True):
                         tec = st.selectbox("Técnico", opciones_empleados, key="tec_horas")
                         colA, colB = st.columns(2)
@@ -361,14 +361,15 @@ with tab2:
                                     try: st.image("exito.jpeg", caption="¡Trabajo Imputado!", use_container_width=True)
                                     except Exception: pass
                 else: st.warning("No se encontraron órdenes con esa búsqueda.")
-            except Exception as e: st.error(f"Error de conexión: {e}")
+            except Exception as e:
+                st.error(f"Error de conexión: {e}")
 
 # ------------------------------------------
-# MÓDULO 3: EDICIÓN RÁPIDA (CON FILTRO DE COTIZACIONES)
+# MÓDULO 3: EDICIÓN RÁPIDA (CON DETALLE COMPLETO)
 # ------------------------------------------
 with tab3:
     st.markdown("### 🔍 Buscar Cotización a Editar")
-    busqueda_edit = st.text_input("Ingrese Cliente o Nro de Orden (Solo pendientes de facturar)", key="input_busqueda_edit")
+    busqueda_edit = st.text_input("Ingrese Cliente o Nro de Orden (Cotizaciones Pendientes)", key="input_busqueda_edit")
     
     if busqueda_edit:
         with st.spinner("Buscando cotizaciones..."):
@@ -377,14 +378,11 @@ with tab3:
                 uid = common.authenticate(DB, USER, PASSWORD, {})
                 models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
                 
-                # 1. Buscamos el ID del Cliente (Partner) si escribió un nombre
+                # Búsquedas filtradas por estado
                 partner_ids = models.execute_kw(DB, uid, PASSWORD, 'res.partner', 'search', [[['name', 'ilike', busqueda_edit]]])
-                
-                # 2. Buscamos órdenes por Nombre (ej. S0045) filtrando solo estado Cotización ('draft', 'sent')
                 domain_name = [['name', 'ilike', busqueda_edit], ['state', 'in', ['draft', 'sent']]]
                 so_ids_name = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search', [domain_name])
                 
-                # 3. Buscamos órdenes por ID de Cliente filtrando solo Cotizaciones
                 so_ids_partner = []
                 if partner_ids:
                     domain_partner = [['partner_id', 'in', partner_ids], ['state', 'in', ['draft', 'sent']]]
@@ -393,19 +391,41 @@ with tab3:
                 all_ids = list(set(so_ids_name + so_ids_partner))
                 
                 if all_ids:
-                    # Traemos los datos de las órdenes ordenadas por la más reciente
                     ordenes = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search_read', 
                                                 [[['id', 'in', all_ids]]], 
                                                 {'fields': ['id', 'name', 'partner_id', 'date_order', 'amount_total', 'state'], 'order': 'id desc'})
                     
-                    # --- TABLA DINÁMICA VISUAL ---
-                    st.markdown("#### 📋 Cotizaciones Pendientes Encontradas")
+                    # 1. Obtener los detalles (Líneas) para el resumen de la tabla
+                    lineas_resumen = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', 
+                                                     [[['order_id', 'in', all_ids]]], 
+                                                     {'fields': ['order_id', 'name', 'display_type']})
+                    
+                    dict_detalles = {}
+                    for l in lineas_resumen:
+                        o_id = l['order_id'][0]
+                        if o_id not in dict_detalles:
+                            dict_detalles[o_id] = []
+                        
+                        # Extraer secciones o la primera línea de los productos
+                        if l['display_type'] == 'line_section' and l['name']:
+                            dict_detalles[o_id].append(l['name'])
+                        elif not l['display_type'] and l['name']: 
+                            dict_detalles[o_id].append(l['name'].split('\n')[0]) 
+
+                    # 2. Armar la Tabla Dinámica
+                    st.markdown("#### 📋 Cotizaciones Pendientes")
                     datos_tabla = []
                     for o in ordenes:
                         estado_texto = "Borrador" if o['state'] == 'draft' else "Enviada"
+                        detalles_lista = dict_detalles.get(o['id'], [])
+                        detalle_texto = " | ".join(detalles_lista) if detalles_lista else "Sin detalle"
+                        if len(detalle_texto) > 60:
+                            detalle_texto = detalle_texto[:57] + "..."
+
                         datos_tabla.append({
                             "Nro. Orden": o['name'],
                             "Cliente": o['partner_id'][1] if o['partner_id'] else "Sin cliente",
+                            "Detalle": detalle_texto,
                             "Fecha": str(o.get('date_order', ''))[:10],
                             "Estado": estado_texto,
                             "Monto": f"${o.get('amount_total', 0):.2f}"
@@ -415,18 +435,83 @@ with tab3:
                     st.dataframe(df_ordenes, use_container_width=True, hide_index=True)
                     st.markdown("---")
                     
-                    # --- SELECTOR PARA EDITAR ---
+                    # 3. Selector para abrir y editar
                     opciones_ord_edit = {f"{o['name']} - Cliente: {o['partner_id'][1]}": o for o in ordenes}
                     
                     with st.container(border=True):
-                        orden_seleccionada = st.selectbox("Seleccione la orden a editar:", list(opciones_ord_edit.keys()), key="sel_ord_edit")
+                        st.markdown("#### 🔧 Seleccione una orden de la lista para editarla")
+                        orden_seleccionada = st.selectbox("Orden a editar:", list(opciones_ord_edit.keys()), key="sel_ord_edit")
                         orden_data = opciones_ord_edit[orden_seleccionada]
                         orden_id_edit = orden_data['id']
                         
                         st.markdown("---")
-                        # SECCIÓN A: CAMBIAR CLIENTE
-                        st.markdown("#### 👤 Cambiar Cliente")
-                        nuevo_cliente_nombre = st.selectbox("Seleccionar nuevo cliente para esta orden", ["Seleccionar..."] + lista_clientes, key="edit_cli")
+                        
+                        # --- SECCIÓN A: EDITAR LÍNEAS COMPLETAS (NUEVO) ---
+                        st.markdown("#### 📝 Editar Detalle de la Orden")
+                        st.write("Modifique textos o cantidades de los trabajos y repuestos cargados.")
+                        
+                        lineas_completas = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', 
+                                                         [[['order_id', '=', orden_id_edit]]], 
+                                                         {'fields': ['id', 'name', 'display_type', 'product_uom_qty']})
+                        
+                        with st.form("form_editar_lineas"):
+                            lineas_modificadas = []
+                            for linea in lineas_completas:
+                                if linea['display_type'] == 'line_section':
+                                    tipo_txt, color = "🔹 SECCIÓN / TRABAJO", "#6a1b9a"
+                                elif linea['display_type'] == 'line_note':
+                                    tipo_txt, color = "📝 NOTA / HORAS", "#e65100"
+                                else:
+                                    tipo_txt, color = "🛒 ARTÍCULO / REPUESTO", "#1565c0"
+
+                                st.markdown(f"<p style='color:{color}; font-size:12px; font-weight:bold; margin-bottom:0;'>{tipo_txt}</p>", unsafe_allow_html=True)
+                                
+                                col_desc, col_cant = st.columns([4, 1])
+                                with col_desc:
+                                    new_name = st.text_area("Descripción", value=linea['name'], key=f"desc_{linea['id']}", label_visibility="collapsed")
+                                with col_cant:
+                                    if not linea['display_type']: # Si es un producto facturable, dejamos editar cantidad
+                                        new_qty = st.number_input("Cant", value=float(linea['product_uom_qty']), key=f"cant_{linea['id']}", label_visibility="collapsed")
+                                    else:
+                                        new_qty = False
+                                
+                                st.markdown("<hr style='margin-top:5px; margin-bottom:15px;'>", unsafe_allow_html=True)
+                                
+                                lineas_modificadas.append({
+                                    'id': linea['id'],
+                                    'old_name': linea['name'],
+                                    'new_name': new_name,
+                                    'is_product': not linea['display_type'],
+                                    'old_qty': float(linea['product_uom_qty']) if not linea['display_type'] else False,
+                                    'new_qty': new_qty
+                                })
+
+                            submit_lineas = st.form_submit_button("💾 Guardar Cambios en Líneas", type="primary")
+                            
+                            if submit_lineas:
+                                cambios_realizados = 0
+                                for mod in lineas_modificadas:
+                                    valores_a_cambiar = {}
+                                    if mod['old_name'] != mod['new_name']:
+                                        valores_a_cambiar['name'] = mod['new_name']
+                                    if mod['is_product'] and mod['old_qty'] != mod['new_qty']:
+                                        valores_a_cambiar['product_uom_qty'] = mod['new_qty']
+                                    
+                                    if valores_a_cambiar:
+                                        models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'write', [[mod['id']], valores_a_cambiar])
+                                        cambios_realizados += 1
+                                        
+                                if cambios_realizados > 0:
+                                    st.success(f"✅ ¡Se actualizaron {cambios_realizados} líneas con éxito!")
+                                    st.rerun()
+                                else:
+                                    st.info("No se detectaron cambios en las líneas.")
+
+                        st.markdown("---")
+                        
+                        # --- SECCIÓN B: CAMBIAR CLIENTE ---
+                        st.markdown("#### 👤 Cambiar Cliente Facturación")
+                        nuevo_cliente_nombre = st.selectbox("Seleccionar nuevo cliente", ["Seleccionar..."] + lista_clientes, key="edit_cli")
                         
                         if st.button("Actualizar Cliente", key="btn_act_cli"):
                             if nuevo_cliente_nombre == "Seleccionar...": st.warning("⚠️ Seleccione un cliente válido.")
@@ -434,12 +519,13 @@ with tab3:
                                 cliente_busqueda = models.execute_kw(DB, uid, PASSWORD, 'res.partner', 'search', [[['name', '=', nuevo_cliente_nombre]]], {'limit': 1})
                                 if cliente_busqueda:
                                     models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'write', [[orden_id_edit], {'partner_id': cliente_busqueda[0]}])
-                                    st.success(f"✅ El cliente de la orden {orden_data['name']} ahora es {nuevo_cliente_nombre}.")
+                                    st.success(f"✅ El cliente ahora es {nuevo_cliente_nombre}.")
                                     st.rerun()
                         
                         st.markdown("---")
-                        # SECCIÓN B: AGREGAR ARTÍCULOS
-                        st.markdown("#### 🛒 Agregar Artículo a la Orden")
+                        
+                        # --- SECCIÓN C: AGREGAR NUEVOS ARTÍCULOS ---
+                        st.markdown("#### 🛒 Sumar Nuevo Artículo a la Orden")
                         opciones_prod_edit = ["Seleccionar..."] + list(dict_productos.keys())
                         prod_sel_edit = st.selectbox("Producto / Artículo", opciones_prod_edit, key="sel_prod_edit")
                         
@@ -454,6 +540,7 @@ with tab3:
                                     'order_id': orden_id_edit, 'product_id': prod_id_edit, 'product_uom_qty': cant_edit
                                 }])
                                 st.success(f"✅ Se agregaron {cant_edit} unidades de '{prod_sel_edit}' a la orden.")
+                                st.rerun()
                                 
                 else: st.warning("No se encontró ninguna cotización pendiente con ese cliente o número.")
             except Exception as e:
