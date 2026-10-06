@@ -351,9 +351,9 @@ with tab2:
                             
                             if submit_horas:
                                 if tec == "Seleccionar...": st.error("⚠️ Seleccione al técnico.")
-                                elif horas_trabajadas <= 0: st.error("⚠️ Las horas deben ser mayor a 0.")
+                                elif horas_trabajadas <= 0: st.error("⚠️️ Las horas deben ser mayor a 0.")
                                 else:
-                                    texto_registro = f"⏱️ HORAS ({tec}): {horas_trabajadas} hs | Fecha: {dia_trabajo.strftime('%d/%m/%Y')}"
+                                    texto_registro = f"⏱️️ HORAS ({tec}): {horas_trabajadas} hs | Fecha: {dia_trabajo.strftime('%d/%m/%Y')}"
                                     texto_registro += f"\n👉 Trabajo realizado en: {trabajo_a_imputar}"
                                     if notas_extra: texto_registro += f"\n📝 Notas Técnicas: {notas_extra}"
                                         
@@ -755,7 +755,7 @@ with tab5:
                                 submit_horas_laser = st.form_submit_button("💾 Imputar Horas", type="primary")
                                 
                                 if submit_horas_laser:
-                                    if tec_laser == "Seleccionar...": st.error("⚠️ Seleccione al operario.")
+                                    if tec_laser == "Seleccionar...": st.error("⚠️️ Seleccione al operario.")
                                     elif horas_trabajadas_laser <= 0: st.error("⚠️ El tiempo debe ser mayor a 0.")
                                     else:
                                         try:
@@ -803,7 +803,7 @@ with tab5:
                                         st.success("✅ ¡Trabajo Finalizado! Limpiando tablero...")
                                         st.rerun()
                                     else:
-                                        st.warning("⚠️️ El servicio ya fue marcado como hecho o no se encuentra.")
+                                        st.warning("⚠️ El servicio ya fue marcado como hecho o no se encuentra.")
                                         
                 else:
                     st.success("✅ Al día. No hay órdenes activas de corte láser pendientes en este momento.")
@@ -814,11 +814,11 @@ with tab5:
             st.error(f"Error de conexión: {e}")
 
 # ------------------------------------------
-# MÓDULO 6: PLANIFICADOR DIARIO Y PRIORIDADES
+# MÓDULO 6: PLANIFICADOR DIARIO Y TARJETAS (NUEVO)
 # ------------------------------------------
 with tab6:
-    st.markdown("### 📅 Planificador Diario y Prioridades")
-    st.write("Organiza los trabajos del día, define prioridades y guía al taller en las tareas a continuar.")
+    st.markdown("### 📅 Planificador Diario (Tarjetas de Producción)")
+    st.write("Configura las 10 órdenes clave del día para que los técnicos sepan exactamente con qué continuar.")
     
     if st.button("🔄 Actualizar Planificador", key="btn_refresh_plan"):
         st.rerun()
@@ -830,71 +830,69 @@ with tab6:
             models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
             
             filtros_activos = [['invoice_status', '!=', 'invoiced'], ['locked', '=', False], ['state', '!=', 'cancel']]
-            # Solicitamos campos seguros de sale.order (sin priority)
             ordenes_plan = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search_read', 
                                             [filtros_activos], 
-                                            {'fields': ['id', 'name', 'partner_id', 'commitment_date', 'amount_total', 'state', 'note'], 'order': 'commitment_date asc'})
+                                            {'fields': ['id', 'name', 'partner_id', 'commitment_date', 'amount_total'], 'order': 'id desc'})
             
             if ordenes_plan:
-                total_activas = len(ordenes_plan)
-                # Evaluamos urgencia basándonos en la etiqueta [URGENTE] dentro de la nota
-                urgentes = sum(1 for o in ordenes_plan if o.get('note') and '[URGENTE]' in str(o.get('note')))
-                hoy_str = date.today().strftime("%Y-%m-%d")
-                para_hoy = sum(1 for o in ordenes_plan if str(o.get('commitment_date', ''))[:10] == hoy_str)
+                opciones_dict = {f"{o['name']} - {o['partner_id'][1] if o['partner_id'] else 'Sin cliente'}": o['id'] for o in ordenes_plan}
+                nombres_opciones = list(opciones_dict.keys())
+                ids_opciones = list(opciones_dict.values())
                 
-                m1, m2, m3 = st.columns(3)
-                m1.metric("📦 Órdenes Activas", total_activas)
-                m2.metric("🔥 Alta Prioridad", urgentes)
-                m3.metric("🎯 Entregas para Hoy", para_hoy)
+                # Inicializar session state para las 10 órdenes del día
+                if 'config_10_ordenes' not in st.session_state:
+                    st.session_state.config_10_ordenes = ids_opciones[:10]
                 
-                st.markdown("---")
-                st.markdown("#### 🛠️ Cola de Prioridades (Vista de Taller)")
-                st.info("Los técnicos pueden revisar esta lista para saber el orden exacto de los trabajos.")
-                
-                datos_plan = []
-                for o in ordenes_plan:
-                    es_urgente = o.get('note') and '[URGENTE]' in str(o.get('note'))
-                    prio_texto = "🔥 Urgente" if es_urgente else "⭐ Normal"
-                    
-                    datos_plan.append({
-                        "Orden": o['name'],
-                        "Cliente": o['partner_id'][1] if o['partner_id'] else "Sin cliente",
-                        "Entrega": str(o.get('commitment_date', 'Sin fecha'))[:10],
-                        "Prioridad": prio_texto,
-                        "Monto": f"${o.get('amount_total', 0):.2f}"
-                    })
-                
-                df_plan = pd.DataFrame(datos_plan)
-                st.dataframe(df_plan, use_container_width=True, hide_index=True)
-                
-                st.markdown("---")
-                st.markdown("#### ✏️ Marcar Orden como Urgente / Normal")
-                
-                opciones_ord_plan = {f"{o['name']} - {o['partner_id'][1]}": o for o in ordenes_plan}
+                # Configuración matutina
                 with st.container(border=True):
-                    sel_orden_prio = st.selectbox("Seleccionar orden para reasignar prioridad", list(opciones_ord_plan.keys()), key="sel_prio_ord")
-                    orden_sel_data = opciones_ord_plan[sel_orden_prio]
+                    st.markdown("#### ⚙️ Configuración Matutina (Selección de Órdenes)")
+                    nombres_seleccionados = st.multiselect(
+                        "Selecciona las órdenes de la jornada (máximo 10):",
+                        options=nombres_opciones,
+                        default=[k for k, v in opciones_dict.items() if v in st.session_state.config_10_ordenes],
+                        max_selections=10,
+                        key="multiselect_10_ordenes"
+                    )
+                    st.session_state.config_10_ordenes = [opciones_dict[nombre] for nombre in nombres_seleccionados]
+                
+                st.markdown("---")
+                st.markdown("#### 🚀 Cola de Trabajo Activa (Vista en Tarjetas para el Taller)")
+                
+                if st.session_state.config_10_ordenes:
+                    ordenes_filtradas = [o for o in ordenes_plan if o['id'] in st.session_state.config_10_ordenes]
                     
-                    nueva_prio = st.selectbox("Estado de Prioridad", ["⭐ Normal", "🔥 Urgente"], key="sel_prio_val")
+                    # Obtener descripciones (líneas)
+                    ordenes_ids = [o['id'] for o in ordenes_filtradas]
+                    lineas_resumen = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', 
+                                                     [[['order_id', 'in', ordenes_ids]]], 
+                                                     {'fields': ['order_id', 'name', 'display_type']})
                     
-                    if st.button("💾 Actualizar Prioridad en Odoo", type="primary", key="btn_save_prio"):
-                        id_a_cambiar = orden_sel_data['id']
-                        nota_actual = str(orden_sel_data.get('note') or '')
+                    dict_detalles = {}
+                    for l in lineas_resumen:
+                        o_id = l['order_id'][0]
+                        if o_id not in dict_detalles: dict_detalles[o_id] = []
+                        if l['display_type'] == 'line_section' and l['name']: dict_detalles[o_id].append(l['name'])
+                        elif not l['display_type'] and l['name']: dict_detalles[o_id].append(l['name'].split('\n')[0]) 
+
+                    # Renderizar tarjetas en columnas (2 columnas)
+                    cols = st.columns(2)
+                    for idx, o in enumerate(ordenes_filtradas):
+                        col_actual = cols[idx % 2]
+                        cliente_nombre = o['partner_id'][1] if o['partner_id'] else "Sin cliente"
+                        nro_orden = o['name']
+                        detalles_lista = dict_detalles.get(o['id'], [])
+                        desc_trabajo = " | ".join(detalles_lista) if detalles_lista else "Sin descripción de trabajo"
                         
-                        # Limpiamos marcas previas si existen para evitar duplicados
-                        nota_limpia = nota_actual.replace("[URGENTE]", "").strip()
-                        
-                        if "Urgente" in nueva_prio:
-                            nueva_nota = f"[URGENTE] {nota_limpia}".strip()
-                        else:
-                            nueva_nota = nota_limpia
-                        
-                        try:
-                            models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'write', [[id_a_cambiar], {'note': nueva_nota}])
-                            st.success("✅ ¡Prioridad actualizada con éxito en el sistema!")
-                            st.rerun()
-                        except Exception as err:
-                            st.error(f"No se pudo actualizar la prioridad: {err}")
+                        with col_actual:
+                            st.markdown(f"""
+                            <div style="background-color: white; border-radius: 12px; padding: 18px; margin-bottom: 16px; box-shadow: 0 4px 16px rgba(0,0,0,0.08); border-left: 6px solid #6a1b9a;">
+                                <h3 style="margin: 0 0 8px 0; color: #1e293b; font-size: 20px;">🏷️ {nro_orden}</h3>
+                                <p style="margin: 0 0 6px 0; font-size: 15px; color: #475569;"><strong>Cliente:</strong> {cliente_nombre}</p>
+                                <p style="margin: 0; font-size: 14px; color: #334155;"><strong>Trabajo:</strong> {desc_trabajo}</p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                else:
+                    st.info("ℹ️ No hay órdenes seleccionadas en la configuración superior.")
             else:
                 st.success("✅ No hay órdenes activas en este momento.")
         except Exception as e:
