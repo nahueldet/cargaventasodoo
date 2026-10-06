@@ -21,6 +21,8 @@ if 'nombre_cliente_etiqueta' not in st.session_state:
     st.session_state.nombre_cliente_etiqueta = ""
 if 'desc_trabajo_etiqueta' not in st.session_state:
     st.session_state.desc_trabajo_etiqueta = ""
+if 'articulos_temporales' not in st.session_state:
+    st.session_state.articulos_temporales = [] # Esta es la nueva "lista de compras"
 
 # --- ESTILOS CSS SÚPER MODERNOS ---
 st.markdown("""
@@ -121,7 +123,6 @@ with st.spinner("Sincronizando base de datos..."):
 
 opciones_clientes = ["Seleccionar...", "➕ CREAR NUEVO CLIENTE"] + lista_clientes
 opciones_empleados = ["Seleccionar..."] + lista_empleados
-opciones_prod = ["(Ninguno - Solo texto)"] + list(dict_productos.keys())
 
 # ==========================================
 # PESTAÑAS (MÓDULOS)
@@ -135,7 +136,7 @@ with tab1:
     if not st.session_state.orden_exitosa:
         st.markdown("### 🏢 Datos Comerciales")
         with st.container(border=True):
-            empleado = st.selectbox("Recepcionista (Técnico interno)", opciones_empleados, key="recepcion_emp")
+            empleado = st.selectbox("Recepcionista (Técnico interno)", opciones_empleados, key="ingreso_emp")
             cliente_seleccionado = st.selectbox("Empresa / Cliente a facturar", opciones_clientes, key="ingreso_cli")
             
             cliente_final = ""
@@ -144,8 +145,8 @@ with tab1:
             
             if cliente_seleccionado == "➕ CREAR NUEVO CLIENTE":
                 st.markdown("<p style='color:#8e24aa; font-weight:bold; font-size:14px;'>Nuevo Registro</p>", unsafe_allow_html=True)
-                cliente_final = st.text_input("Razón Social")
-                telefono_final = st.text_input("Teléfono (Opcional)")
+                cliente_final = st.text_input("Razón Social", key="ingreso_rs")
+                telefono_final = st.text_input("Teléfono (Opcional)", key="ingreso_tel")
                 es_cliente_nuevo = True
             else:
                 cliente_final = cliente_seleccionado
@@ -153,23 +154,54 @@ with tab1:
         st.markdown("### ⚙️ Especificaciones")
         with st.container(border=True):
             col1, col2 = st.columns(2)
-            with col1: persona_deja_trabajo = st.text_input("Traído por (Chofer)")
-            with col2: fecha_entrega = st.date_input("Fecha Prometida", value=date.today())
+            with col1: persona_deja_trabajo = st.text_input("Traído por (Chofer)", key="ingreso_chofer")
+            with col2: fecha_entrega = st.date_input("Fecha Prometida", value=date.today(), key="ingreso_fecha")
                 
-            trabajo = st.text_input("Descripción libre del trabajo a realizar")
-            
-            with st.expander("🛒 Cargar Artículo/Servicio Odoo (Opcional)"):
-                st.write("Seleccione si desea adjuntar un código de servicio al trabajo.")
-                prod_sel_ingreso = st.selectbox("Producto o Servicio a facturar", opciones_prod, key="prod_ingreso")
-                
-                colA_prod, colB_prod = st.columns(2)
-                with colA_prod: cant_ingreso = st.number_input("Cantidad", min_value=1.0, step=1.0, value=1.0, key="cant_ingreso")
+            trabajo = st.text_input("Descripción libre del trabajo a realizar", key="ingreso_desc")
             
             foto_adjunta = st.file_uploader("Evidencia fotográfica", type=['jpg', 'jpeg', 'png'])
             if foto_adjunta is not None:
                 st.image(foto_adjunta, caption="Archivo listo", use_container_width=True)
+        
+        # --- NUEVA SECCIÓN: CARRITO DE PRODUCTOS MÚLTIPLES ---
+        st.markdown("### 🛒 Artículos / Materiales (Opcional)")
+        with st.container(border=True):
+            st.write("Agregue aquí todos los servicios o repuestos necesarios.")
+            
+            # Mostrar la lista de artículos ya agregados
+            if st.session_state.articulos_temporales:
+                for idx, item in enumerate(st.session_state.articulos_temporales):
+                    c1, c2, c3 = st.columns([5, 3, 2])
+                    c1.markdown(f"🔹 **{item['nombre']}**")
+                    c2.markdown(f"Cant: **{item['cant']}**")
+                    # Botón para eliminar un artículo de la lista
+                    if c3.button("❌ Quitar", key=f"del_art_{idx}"):
+                        st.session_state.articulos_temporales.pop(idx)
+                        st.rerun()
+                st.markdown("---")
+            
+            # Controles para agregar un nuevo artículo a la lista
+            c_prod, c_cant, c_btn = st.columns([5, 2, 3])
+            with c_prod:
+                prod_sel_ingreso = st.selectbox("Seleccionar producto", ["Seleccionar..."] + list(dict_productos.keys()), key="sel_nuevo_prod")
+            with c_cant:
+                cant_ingreso = st.number_input("Cant", min_value=0.25, step=1.0, value=1.0, key="cant_nuevo_prod")
+            with c_btn:
+                st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+                if st.button("➕ Añadir a la lista", use_container_width=True):
+                    if prod_sel_ingreso != "Seleccionar...":
+                        st.session_state.articulos_temporales.append({
+                            'nombre': prod_sel_ingreso,
+                            'id': dict_productos[prod_sel_ingreso],
+                            'cant': cant_ingreso
+                        })
+                        st.rerun() # Recarga la pantalla para mostrar el nuevo item
+                    else:
+                        st.warning("Elija un producto primero.")
 
         st.markdown("<br>", unsafe_allow_html=True)
+        
+        # --- BOTÓN DE ENVÍO FINAL ---
         if st.button("🚀 Enviar Orden al Taller", type="primary", key="btn_ingreso"):
             if empleado == "Seleccionar...": st.error("⚠️ Faltan datos: Indique recepcionista.")
             elif cliente_seleccionado == "Seleccionar...": st.error("⚠️ Faltan datos: Seleccione cliente.")
@@ -181,6 +213,7 @@ with tab1:
                         uid = common.authenticate(DB, USER, PASSWORD, {})
                         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
                         
+                        # 1. Gestionar Cliente
                         if es_cliente_nuevo:
                             datos_nuevo = {'name': cliente_final, 'is_company': True}
                             if telefono_final: datos_nuevo['phone'] = telefono_final
@@ -189,6 +222,7 @@ with tab1:
                             cliente_busqueda = models.execute_kw(DB, uid, PASSWORD, 'res.partner', 'search', [[['name', '=', cliente_final]]], {'limit': 1})
                             cliente_id_odoo = cliente_busqueda[0] if cliente_busqueda else False
                              
+                        # 2. Crear Orden
                         observaciones = f"=== INGRESO DE MATERIAL ===\nRecepcionado por: {empleado}\nTraído por: {persona_deja_trabajo if persona_deja_trabajo else 'No especificado'}\n"
                         orden_id = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'create', [{
                             'partner_id': cliente_id_odoo,
@@ -196,18 +230,21 @@ with tab1:
                             'note': observaciones
                         }])
                         
+                        # 3. Crear Línea de Sección (El texto descriptivo libre)
                         models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [{
                             'order_id': orden_id, 'display_type': 'line_section', 'name': trabajo              
                         }])
                         
-                        if prod_sel_ingreso != "(Ninguno - Solo texto)":
-                            prod_id = dict_productos[prod_sel_ingreso]
-                            models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [{
-                                'order_id': orden_id,
-                                'product_id': prod_id,
-                                'product_uom_qty': cant_ingreso
-                            }])
+                        # 4. Crear Líneas de Productos (Iteramos sobre la lista dinámica)
+                        if st.session_state.articulos_temporales:
+                            for art in st.session_state.articulos_temporales:
+                                models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [{
+                                    'order_id': orden_id,
+                                    'product_id': art['id'],
+                                    'product_uom_qty': art['cant']
+                                }])
                         
+                        # 5. Adjuntar Foto
                         if foto_adjunta is not None:
                             foto_base64 = base64.b64encode(foto_adjunta.read()).decode('utf-8')
                             models.execute_kw(DB, uid, PASSWORD, 'ir.attachment', 'create', [{
@@ -215,6 +252,7 @@ with tab1:
                                 'res_model': 'sale.order', 'res_id': orden_id         
                             }])
 
+                        # 6. Éxito y QR
                         orden = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'read', [[orden_id]], {'fields': ['name']})
                         
                         qr = qrcode.QRCode(version=1, box_size=10, border=1) 
@@ -238,7 +276,7 @@ with tab1:
                     except Exception as e:
                         st.error(f"Error: {e}")
 
-    # PANTALLA DE IMPRESIÓN 
+    # PANTALLA DE IMPRESIÓN Y REINICIO
     else:
         st.success(f"✅ ¡Ingreso Registrado! Orden **{st.session_state.num_orden_generada}**.")
         colA, colB, colC = st.columns([1, 2, 1])
@@ -277,12 +315,22 @@ with tab1:
         """
         components.html(html_etiqueta, height=220)
         st.markdown("<br>", unsafe_allow_html=True)
+        
+        # Botón para reiniciar (borramos la lista temporal y limpiamos las llaves)
         if st.button("🔄 Cargar un Nuevo Trabajo", type="primary", key="btn_reiniciar"):
             st.session_state.orden_exitosa = False
             st.session_state.num_orden_generada = ""
             st.session_state.qr_base64 = ""
             st.session_state.nombre_cliente_etiqueta = ""
             st.session_state.desc_trabajo_etiqueta = ""
+            st.session_state.articulos_temporales = [] # Vaciamos el carrito
+            
+            # Forzamos la limpieza de las variables escritas en el formulario
+            keys_to_clear = ['ingreso_emp', 'ingreso_cli', 'ingreso_rs', 'ingreso_tel', 'ingreso_chofer', 'ingreso_desc', 'sel_nuevo_prod', 'cant_nuevo_prod']
+            for k in keys_to_clear:
+                if k in st.session_state:
+                    del st.session_state[k]
+                    
             st.rerun()
 
 # ------------------------------------------
@@ -302,24 +350,17 @@ with tab2:
                 uid = common.authenticate(DB, USER, PASSWORD, {})
                 models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
                 
-                # 1. Búsqueda por Número de Orden
                 so_ids_name = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search', [[['name', 'ilike', busqueda]]])
-                
-                # 2. Búsqueda por Descripción del Trabajo (Líneas)
                 lineas = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', [[['name', 'ilike', busqueda]]], {'fields': ['order_id']})
                 line_so_ids = [line['order_id'][0] for line in lineas if line.get('order_id')]
-                
-                # 3. NUEVO: Búsqueda por Nombre de Cliente
                 partner_ids = models.execute_kw(DB, uid, PASSWORD, 'res.partner', 'search', [[['name', 'ilike', busqueda]]])
                 so_ids_partner = []
                 if partner_ids:
                     so_ids_partner = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search', [[['partner_id', 'in', partner_ids]]])
                 
-                # Juntamos todos los resultados encontrados sin repetir (usando set)
                 all_ids = list(set(so_ids_name + line_so_ids + so_ids_partner))
                 
                 if all_ids:
-                    # Traemos las órdenes. El "order": "id desc" asegura que las más recientes salgan primero, limitamos a 50 para velocidad.
                     ordenes = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search_read', 
                                                 [[['id', 'in', all_ids]]], 
                                                 {'fields': ['id', 'name', 'partner_id'], 'order': 'id desc', 'limit': 50})
