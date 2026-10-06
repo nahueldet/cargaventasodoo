@@ -9,7 +9,7 @@ from streamlit_qrcode_scanner import qrcode_scanner
 import pandas as pd
 
 # Configuración básica de la página
-st.set_page_config(page_title="TECNOFLY SOLUTIONS", page_icon="⚡", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Gestión de Taller", page_icon="⚡", layout="wide", initial_sidebar_state="collapsed")
 
 # --- CONTROL DE ESTADO ---
 if 'orden_exitosa' not in st.session_state:
@@ -69,7 +69,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- ENCABEZADO ---
-st.title("⚡ TECNOFLY SOLUTIONS")
+st.title("⚡ Gestión de Taller")
 
 # --- CREDENCIALES ---
 URL_CRUDA = st.secrets["ODOO_URL"]
@@ -122,9 +122,9 @@ opciones_clientes = ["Seleccionar...", "➕ CREAR NUEVO CLIENTE"] + lista_client
 opciones_empleados = ["Seleccionar..."] + list(dict_empleados.keys())
 
 # ==========================================
-# PESTAÑAS (MÓDULOS)
+# PESTAÑAS (MÓDULOS) - AHORA 6 TABS
 # ==========================================
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📦 Ingreso", "⏱️ Horas General", "✏️ Editar", "⚡ Electroerosión", "💥 Corte Láser"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📦 Ingreso", "⏱️ Horas General", "✏️ Editar", "⚡ Electroerosión", "💥 Corte Láser", "📅 Planificador"])
 
 # ------------------------------------------
 # MÓDULO 1: INGRESO DE MATERIAL 
@@ -133,7 +133,7 @@ with tab1:
     if not st.session_state.orden_exitosa:
         st.markdown("### 🏢 Datos Comerciales")
         with st.container(border=True):
-            empleado = st.selectbox("Recepcionista", opciones_empleados, key="ingreso_emp")
+            empleado = st.selectbox("Recepcionista (Técnico interno)", opciones_empleados, key="ingreso_emp")
             cliente_seleccionado = st.selectbox("Empresa / Cliente a facturar", opciones_clientes, key="ingreso_cli")
             
             cliente_final = ""
@@ -151,7 +151,7 @@ with tab1:
         st.markdown("### ⚙ Especificaciones")
         with st.container(border=True):
             col1, col2 = st.columns(2)
-            with col1: persona_deja_trabajo = st.text_input("Traído por", key="ingreso_chofer")
+            with col1: persona_deja_trabajo = st.text_input("Traído por (Chofer)", key="ingreso_chofer")
             with col2: fecha_entrega = st.date_input("Fecha Prometida", value=date.today(), key="ingreso_fecha")
                 
             trabajo = st.text_input("Descripción libre del trabajo a realizar", key="ingreso_desc")
@@ -186,7 +186,7 @@ with tab1:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("🚀 Enviar Orden al Taller", type="primary", key="btn_ingreso"):
             if empleado == "Seleccionar...": st.error("⚠️ Faltan datos: Indique recepcionista.")
-            elif cliente_seleccionado == "Seleccionar...": st.error("⚠️️ Faltan datos: Seleccione cliente.")
+            elif cliente_seleccionado == "Seleccionar...": st.error("⚠️ Faltan datos: Seleccione cliente.")
             elif not trabajo: st.error("⚠️ Describa el trabajo.")
             else:
                 with st.spinner("Procesando en Odoo..."):
@@ -667,7 +667,7 @@ with tab4:
             st.error(f"Error de conexión: {e}")
 
 # ------------------------------------------
-# MÓDULO 5: TABLERO DE CORTE LÁSER CNC (NUEVO)
+# MÓDULO 5: TABLERO DE CORTE LÁSER CNC
 # ------------------------------------------
 with tab5:
     st.markdown("### 💥 Panel de Control - Corte Láser CNC")
@@ -755,7 +755,7 @@ with tab5:
                                 submit_horas_laser = st.form_submit_button("💾 Imputar Horas", type="primary")
                                 
                                 if submit_horas_laser:
-                                    if tec_laser == "Seleccionar...": st.error("⚠️ Seleccione al operario.")
+                                    if tec_laser == "Seleccionar...": st.error("⚠️️ Seleccione al operario.")
                                     elif horas_trabajadas_laser <= 0: st.error("⚠️ El tiempo debe ser mayor a 0.")
                                     else:
                                         try:
@@ -812,3 +812,84 @@ with tab5:
                 
         except Exception as e:
             st.error(f"Error de conexión: {e}")
+
+# ------------------------------------------
+# MÓDULO 6: PLANIFICADOR DIARIO Y PRIORIDADES (NUEVO)
+# ------------------------------------------
+with tab6:
+    st.markdown("### 📅 Planificador Diario y Prioridades")
+    st.write("Organiza los trabajos del día, define prioridades y guía al taller en las tareas a continuar.")
+    
+    if st.button("🔄 Actualizar Planificador", key="btn_refresh_plan"):
+        st.rerun()
+        
+    with st.spinner("Cargando órdenes activas..."):
+        try:
+            common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
+            uid = common.authenticate(DB, USER, PASSWORD, {})
+            models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+            
+            filtros_activos = [['invoice_status', '!=', 'invoiced'], ['locked', '=', False], ['state', '!=', 'cancel']]
+            ordenes_plan = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search_read', 
+                                            [filtros_activos], 
+                                            {'fields': ['id', 'name', 'partner_id', 'commitment_date', 'amount_total', 'state', 'priority'], 'order': 'commitment_date asc'})
+            
+            if ordenes_plan:
+                # Métricas / Gráficos modernos superiores
+                total_activas = len(ordenes_plan)
+                urgentes = sum(1 for o in ordenes_plan if o.get('priority') == '1' or o.get('priority') == 'True')
+                hoy_str = date.today().strftime("%Y-%m-%d")
+                para_hoy = sum(1 for o in ordenes_plan if str(o.get('commitment_date', ''))[:10] == hoy_str)
+                
+                m1, m2, m3 = st.columns(3)
+                m1.metric("📦 Órdenes Activas", total_activas)
+                m2.metric("🔥 Alta Prioridad", urgentes)
+                m3.metric("🎯 Entregas para Hoy", para_hoy)
+                
+                st.markdown("---")
+                st.markdown("#### 🛠️ Cola de Prioridades (Vista de Taller)")
+                st.info("Los técnicos pueden revisar esta lista para saber el orden exacto de los trabajos.")
+                
+                # Preparamos datos para la tabla interactiva
+                datos_plan = []
+                for o in ordenes_plan:
+                    prio_actual = o.get('priority', '0')
+                    # Mapeo amigable para prioridades de Odoo si es string o booleano
+                    prio_texto = "🔥 Urgente" if prio_actual in ['1', 'True', 1] else "⭐ Normal"
+                    
+                    datos_plan.append({
+                        "ID": o['id'],
+                        "Orden": o['name'],
+                        "Cliente": o['partner_id'][1] if o['partner_id'] else "Sin cliente",
+                        "Entrega": str(o.get('commitment_date', 'Sin fecha'))[:10],
+                        "Prioridad": prio_texto,
+                        "Monto": f"${o.get('amount_total', 0):.2f}"
+                    })
+                
+                df_plan = pd.DataFrame(datos_plan)
+                
+                # Mostramos una tabla limpia y ordenada para el taller
+                st.dataframe(df_plan[["Orden", "Cliente", "Entrega", "Prioridad", "Monto"]], use_container_width=True, hide_index=True)
+                
+                st.markdown("---")
+                st.markdown("#### ✏️ Cambiar Prioridad de una Orden")
+                
+                opciones_ord_plan = {f"{o['name']} - {o['partner_id'][1]}": o['id'] for o in ordenes_plan}
+                with st.container(border=True):
+                    sel_orden_prio = st.selectbox("Seleccionar orden para reasignar prioridad", list(opciones_ord_plan.keys()), key="sel_prio_ord")
+                    nuevo_nivel = st.selectbox("Nueva Prioridad", ["⭐ Normal (0)", "🔥 Urgente (1)"], key="sel_prio_val")
+                    
+                    if st.button("💾 Actualizar Prioridad en Odoo", type="primary", key="btn_save_prio"):
+                        id_a_cambiar = opciones_ord_plan[sel_orden_prio]
+                        val_odoo = '1' if "Urgente" in nuevo_nivel else '0'
+                        
+                        try:
+                            models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'write', [[id_a_cambiar], {'priority': val_odoo}])
+                            st.success("✅ ¡Prioridad actualizada con éxito en el sistema!")
+                            st.rerun()
+                        except Exception as err:
+                            st.error(f"No se pudo actualizar la prioridad: {err}")
+            else:
+                st.success("✅ No hay órdenes activas en este momento.")
+        except Exception as e:
+            st.error(f"Error de conexión con Odoo: {e}")
