@@ -69,7 +69,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- ENCABEZADO ---
-st.title("⚡ Gestión de Taller")
+st.title("⚡ TECNOFLY SOLUTIONS")
 
 # --- CREDENCIALES ---
 URL_CRUDA = st.secrets["ODOO_URL"]
@@ -133,7 +133,7 @@ with tab1:
     if not st.session_state.orden_exitosa:
         st.markdown("### 🏢 Datos Comerciales")
         with st.container(border=True):
-            empleado = st.selectbox("Recepcionista (Técnico interno)", opciones_empleados, key="ingreso_emp")
+            empleado = st.selectbox("Recepcionista", opciones_empleados, key="ingreso_emp")
             cliente_seleccionado = st.selectbox("Empresa / Cliente a facturar", opciones_clientes, key="ingreso_cli")
             
             cliente_final = ""
@@ -151,7 +151,7 @@ with tab1:
         st.markdown("### ⚙ Especificaciones")
         with st.container(border=True):
             col1, col2 = st.columns(2)
-            with col1: persona_deja_trabajo = st.text_input("Traído por (Chofer)", key="ingreso_chofer")
+            with col1: persona_deja_trabajo = st.text_input("Traído por", key="ingreso_chofer")
             with col2: fecha_entrega = st.date_input("Fecha Prometida", value=date.today(), key="ingreso_fecha")
                 
             trabajo = st.text_input("Descripción libre del trabajo a realizar", key="ingreso_desc")
