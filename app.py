@@ -9,7 +9,7 @@ from streamlit_qrcode_scanner import qrcode_scanner
 import pandas as pd
 
 # Configuración básica de la página
-st.set_page_config(page_title="Gestión de Taller", page_icon="⚡", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="TECNOFLY SOLUTIONS", page_icon="⚡", layout="wide", initial_sidebar_state="collapsed")
 
 # --- CONTROL DE ESTADO ---
 if 'orden_exitosa' not in st.session_state:
