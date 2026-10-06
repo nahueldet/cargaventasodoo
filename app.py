@@ -9,7 +9,7 @@ from streamlit_qrcode_scanner import qrcode_scanner
 import pandas as pd
 
 # Configuración básica de la página
-st.set_page_config(page_title="Gestión de Taller", page_icon="⚡", layout="centered", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Gestión de Taller", page_icon="⚡", layout="wide", initial_sidebar_state="collapsed")
 
 # --- CONTROL DE ESTADO ---
 if 'orden_exitosa' not in st.session_state:
@@ -98,7 +98,6 @@ def obtener_empleados():
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         empleados_data = models.execute_kw(DB, uid, PASSWORD, 'hr.employee', 'search_read', 
             [], {'fields': ['id', 'name'], 'order': 'name asc'})
-        # AHORA RETORNA UN DICCIONARIO { 'Nombre': ID } PARA PODER USAR EL ID EN LA HOJA DE HORAS
         return {e['name']: e['id'] for e in empleados_data}
     except Exception: return {"Nahuel de Titto": 1, "Taller 1": 2}
 
@@ -121,7 +120,6 @@ with st.spinner("Sincronizando base de datos..."):
 
 opciones_clientes = ["Seleccionar...", "➕ CREAR NUEVO CLIENTE"] + lista_clientes
 opciones_empleados = ["Seleccionar..."] + list(dict_empleados.keys())
-opciones_prod = ["(Ninguno - Solo texto)"] + list(dict_productos.keys())
 
 # ==========================================
 # PESTAÑAS (MÓDULOS)
@@ -239,7 +237,6 @@ with tab1:
                         st.rerun()
                     except Exception as e: st.error(f"Error: {e}")
 
-    # PANTALLA DE IMPRESIÓN Y REINICIO
     else:
         st.success(f"✅ ¡Ingreso Registrado! Orden **{st.session_state.num_orden_generada}**.")
         colA, colB, colC = st.columns([1, 2, 1])
@@ -308,7 +305,6 @@ with tab2:
                 uid = common.authenticate(DB, USER, PASSWORD, {})
                 models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
                 
-                # FILTROS DE LA CAPTURA DE ODOO (Incluye state != cancel)
                 filtros_activos = [['invoice_status', '!=', 'invoiced'], ['locked', '=', False], ['state', '!=', 'cancel']]
                 
                 so_ids_name = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search', [[['name', 'ilike', busqueda]] + filtros_activos])
@@ -317,7 +313,6 @@ with tab2:
                 if partner_ids:
                     so_ids_partner = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search', [[['partner_id', 'in', partner_ids]] + filtros_activos])
                 
-                # Busqueda en lineas
                 lineas = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', [[['name', 'ilike', busqueda]]], {'fields': ['order_id']})
                 line_so_ids_crudos = [line['order_id'][0] for line in lineas if line.get('order_id')]
                 
@@ -525,11 +520,11 @@ with tab3:
                 st.error(f"Error de conexión: {e}")
 
 # ------------------------------------------
-# MÓDULO 4: TABLERO DE ELECTROEROSIÓN + CARGA HORAS EN TIMESHEET
+# MÓDULO 4: TABLERO DE ELECTROEROSIÓN (CON BOTÓN "HECHO")
 # ------------------------------------------
 with tab4:
     st.markdown("### ⚡ Panel de Control - Corte por Hilo")
-    st.write("Trabajos activos que requieren servicio de electroerosión.")
+    st.write("Trabajos activos que requieren servicio de electroerosión y NO están marcados como hechos.")
     
     if st.button("🔄 Actualizar Tablero", key="btn_refresh_edm"):
         st.rerun()
@@ -540,14 +535,19 @@ with tab4:
             uid = common.authenticate(DB, USER, PASSWORD, {})
             models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
             
+            # FILTRO MAGICO: Busca 'CORTE POR HILO' que NO tenga la palabra '[HECHO]'
+            domain_lineas_hilo = [
+                ['name', 'ilike', 'CORTE POR HILO'],
+                ['name', 'not ilike', '[HECHO]']
+            ]
+            
             lineas_hilo = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', 
-                                           [[['name', 'ilike', 'CORTE POR HILO']]], 
+                                           [domain_lineas_hilo], 
                                            {'fields': ['order_id']})
             
             order_ids_hilo = list(set([l['order_id'][0] for l in lineas_hilo if l.get('order_id')]))
             
             if order_ids_hilo:
-                # SE AGREGA EL FILTRO PARA ORDENES CANCELADAS (state != cancel)[cite: 2]
                 filtros_activos = [['invoice_status', '!=', 'invoiced'], ['locked', '=', False], ['state', '!=', 'cancel']]
                 domain_edm = [['id', 'in', order_ids_hilo]] + filtros_activos
                 
@@ -586,73 +586,83 @@ with tab4:
                     st.dataframe(df_edm, use_container_width=True, hide_index=True)
                     st.markdown("---")
                     
-                    # --- CARGA DIRECTA DE HORAS EN HOJA DE HORAS (TIMESHEETS) ---
-                    st.markdown("#### ⏱️ Registrar Horas en Electroerosión")
-                    st.write("Seleccione la orden para enviar las horas directo a la hoja de horas del servicio.")
-                    
+                    # --- GESTIÓN DEL TRABAJO ---
+                    st.markdown("#### 🔧 Gestión de Electroerosión")
                     opciones_ord_edm = {f"{o['name']} - Cliente: {o['partner_id'][1]}": o['id'] for o in ordenes_edm}
                     
                     with st.container(border=True):
-                        orden_seleccionada_edm = st.selectbox("Seleccione la orden a imputar:", list(opciones_ord_edm.keys()), key="sel_ord_edm")
+                        orden_seleccionada_edm = st.selectbox("Seleccione la orden a gestionar:", list(opciones_ord_edm.keys()), key="sel_ord_edm")
                         orden_id_edm = opciones_ord_edm[orden_seleccionada_edm]
                         
-                        with st.form("form_horas_edm", clear_on_submit=True):
-                            tec_edm = st.selectbox("Operario", opciones_empleados, key="tec_edm")
+                        st.markdown("---")
+                        
+                        col_horas, col_hecho = st.columns([2, 1])
+                        
+                        # COLUMNA IZQUIERDA: CARGA DE HORAS
+                        with col_horas:
+                            st.markdown("##### ⏱️ Registrar Horas Parciales")
+                            with st.form("form_horas_edm", clear_on_submit=True):
+                                tec_edm = st.selectbox("Operario", opciones_empleados, key="tec_edm")
+                                colA_edm, colB_edm = st.columns(2)
+                                with colA_edm: dia_trabajo_edm = st.date_input("Día", value=date.today(), key="dia_edm")
+                                with colB_edm: horas_trabajadas_edm = st.number_input("Tiempo (Hs)", min_value=0.0, step=0.25, value=1.0, key="num_horas_edm")
+                                notas_extra_edm = st.text_area("Descripción / Notas", key="notas_edm")
+                                
+                                submit_horas_edm = st.form_submit_button("💾 Imputar Horas", type="primary")
+                                
+                                if submit_horas_edm:
+                                    if tec_edm == "Seleccionar...": st.error("⚠️ Seleccione al operario.")
+                                    elif horas_trabajadas_edm <= 0: st.error("⚠️ El tiempo debe ser mayor a 0.")
+                                    else:
+                                        try:
+                                            linea_hilo = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', 
+                                                [[['order_id', '=', orden_id_edm], ['name', 'ilike', 'CORTE POR HILO'], ['name', 'not ilike', '[HECHO]']]], 
+                                                {'fields': ['id', 'project_id', 'task_id'], 'limit': 1})
+                                            
+                                            if linea_hilo:
+                                                l_id = linea_hilo[0]['id']
+                                                empleado_id = dict_empleados[tec_edm]
+                                                desc_ts = f"EDM: {notas_extra_edm}" if notas_extra_edm else "Trabajo de Electroerosión"
+                                                
+                                                ts_vals = {
+                                                    'name': desc_ts, 'employee_id': empleado_id, 'unit_amount': horas_trabajadas_edm,
+                                                    'so_line': l_id, 'date': dia_trabajo_edm.strftime("%Y-%m-%d")
+                                                }
+                                                
+                                                if linea_hilo[0].get('project_id'): ts_vals['project_id'] = linea_hilo[0]['project_id'][0]
+                                                if linea_hilo[0].get('task_id'): ts_vals['task_id'] = linea_hilo[0]['task_id'][0]
+                                                    
+                                                models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'create', [ts_vals])
+                                                st.success("✅ ¡Horas imputadas en Odoo!")
+                                            else:
+                                                st.warning("⚠️ No se encontró la línea del servicio.")
+                                        except Exception as e:
+                                            texto_registro = f"⏱️ HORAS EDM ({tec_edm}): {horas_trabajadas_edm} hs | Fecha: {dia_trabajo_edm.strftime('%d/%m/%Y')}"
+                                            if notas_extra_edm: texto_registro += f"\n📝 Notas: {notas_extra_edm}"
+                                            models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [{'order_id': orden_id_edm, 'display_type': 'line_note', 'name': texto_registro}])
+                                            st.success("✅ ¡Horas anexadas como nota a la orden!")
+
+                        # COLUMNA DERECHA: BOTÓN HECHO
+                        with col_hecho:
+                            st.markdown("##### ✅ Finalizar Trabajo")
+                            st.info("Al marcarlo como terminado, dejará de listarse en este tablero para evitar confusiones.")
                             
-                            colA_edm, colB_edm = st.columns(2)
-                            with colA_edm: dia_trabajo_edm = st.date_input("Día del trabajo", value=date.today(), key="dia_edm")
-                            with colB_edm: horas_trabajadas_edm = st.number_input("Tiempo utilizado (Hs)", min_value=0.0, step=0.25, value=1.0, key="num_horas_edm")
-                            
-                            notas_extra_edm = st.text_area("Descripción / Notas", key="notas_edm")
-                            submit_horas_edm = st.form_submit_button("Imputar en Hoja de Horas", type="primary")
-                            
-                            if submit_horas_edm:
-                                if tec_edm == "Seleccionar...": st.error("⚠️ Seleccione al operario.")
-                                elif horas_trabajadas_edm <= 0: st.error("⚠️ El tiempo debe ser mayor a 0.")
-                                else:
-                                    try:
-                                        # 1. Obtenemos el ID exacto de la línea del artículo "CORTE POR HILO" de esta orden
-                                        linea_hilo = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', 
-                                            [[['order_id', '=', orden_id_edm], ['name', 'ilike', 'CORTE POR HILO']]], 
-                                            {'fields': ['id', 'project_id', 'task_id'], 'limit': 1})
+                            if st.button("Marcar Servicio como HECHO", use_container_width=True):
+                                with st.spinner("Actualizando estado en Odoo..."):
+                                    linea_hilo = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', 
+                                                [[['order_id', '=', orden_id_edm], ['name', 'ilike', 'CORTE POR HILO'], ['name', 'not ilike', '[HECHO]']]], 
+                                                {'fields': ['id', 'name'], 'limit': 1})
+                                    
+                                    if linea_hilo:
+                                        l_id = linea_hilo[0]['id']
+                                        # Le agregamos la etiqueta mágica al final de la descripción
+                                        nuevo_nombre = linea_hilo[0]['name'] + "\n=== [HECHO] ==="
+                                        models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'write', [[l_id], {'name': nuevo_nombre}])
+                                        st.success("✅ ¡Trabajo Finalizado! Limpiando tablero...")
+                                        st.rerun()
+                                    else:
+                                        st.warning("⚠️ El servicio ya fue marcado como hecho o no se encuentra.")
                                         
-                                        if linea_hilo:
-                                            l_id = linea_hilo[0]['id']
-                                            empleado_id = dict_empleados[tec_edm] # Pasamos el Nombre a ID de Odoo
-                                            
-                                            desc_ts = f"EDM: {notas_extra_edm}" if notas_extra_edm else "Trabajo de Electroerosión"
-                                            
-                                            ts_vals = {
-                                                'name': desc_ts,
-                                                'employee_id': empleado_id,
-                                                'unit_amount': horas_trabajadas_edm,
-                                                'so_line': l_id,
-                                                'date': dia_trabajo_edm.strftime("%Y-%m-%d")
-                                            }
-                                            
-                                            # Si Odoo generó un Proyecto o Tarea para este servicio, lo asociamos para evitar errores
-                                            if linea_hilo[0].get('project_id'): ts_vals['project_id'] = linea_hilo[0]['project_id'][0]
-                                            if linea_hilo[0].get('task_id'): ts_vals['task_id'] = linea_hilo[0]['task_id'][0]
-                                                
-                                            # Inyectamos en la Hoja de Horas (Timesheets / account.analytic.line)
-                                            models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'create', [ts_vals])
-                                            st.success("✅ ¡Horas imputadas directamente a la hoja de horas analítica del servicio!")
-                                            
-                                            colX, colY, colZ = st.columns([1, 2, 1])
-                                            with colY:
-                                                try: st.image("exito.jpeg", caption="¡Horas Guardadas!", use_container_width=True)
-                                                except Exception: pass
-                                                
-                                        else:
-                                            st.warning("⚠️ No se encontró la línea exacta del servicio en la orden. Revise la facturación.")
-                                            
-                                    except Exception as e:
-                                        # PARACAÍDAS (Fallback): Si tu Odoo no tiene el módulo de Partes de Horas activo o configurado, 
-                                        # lo guarda como una nota normal en la orden para que el trabajo no se pierda.
-                                        texto_registro = f"⏱️ HORAS EDM ({tec_edm}): {horas_trabajadas_edm} hs | Fecha: {dia_trabajo_edm.strftime('%d/%m/%Y')}"
-                                        if notas_extra_edm: texto_registro += f"\n📝 Notas: {notas_extra_edm}"
-                                        models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [{'order_id': orden_id_edm, 'display_type': 'line_note', 'name': texto_registro}])
-                                        st.success("✅ ¡Horas anexadas como nota a la orden de venta!")
                 else:
                     st.success("✅ Al día. No hay órdenes activas de corte por hilo pendientes en este momento.")
             else:
