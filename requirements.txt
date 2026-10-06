@@ -1,3 +1,4 @@
 streamlit
 qrcode[pil]
 streamlit-qrcode-scanner
+pandas
