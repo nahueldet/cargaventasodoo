@@ -124,7 +124,7 @@ opciones_empleados = ["Seleccionar..."] + list(dict_empleados.keys())
 # ==========================================
 # PESTAÑAS (MÓDULOS)
 # ==========================================
-tab1, tab2, tab3, tab4 = st.tabs(["📦 Ingreso", "⏱️ Horas General", "✏️ Editar", "⚡ Electroerosión"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📦 Ingreso", "⏱️ Horas General", "✏️ Editar", "⚡ Electroerosión", "💥 Corte Láser"])
 
 # ------------------------------------------
 # MÓDULO 1: INGRESO DE MATERIAL 
@@ -186,7 +186,7 @@ with tab1:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("🚀 Enviar Orden al Taller", type="primary", key="btn_ingreso"):
             if empleado == "Seleccionar...": st.error("⚠️ Faltan datos: Indique recepcionista.")
-            elif cliente_seleccionado == "Seleccionar...": st.error("⚠️ Faltan datos: Seleccione cliente.")
+            elif cliente_seleccionado == "Seleccionar...": st.error("⚠️️ Faltan datos: Seleccione cliente.")
             elif not trabajo: st.error("⚠️ Describa el trabajo.")
             else:
                 with st.spinner("Procesando en Odoo..."):
@@ -520,7 +520,7 @@ with tab3:
                 st.error(f"Error de conexión: {e}")
 
 # ------------------------------------------
-# MÓDULO 4: TABLERO DE ELECTROEROSIÓN (CON BOTÓN "HECHO")
+# MÓDULO 4: TABLERO DE ELECTROEROSIÓN
 # ------------------------------------------
 with tab4:
     st.markdown("### ⚡ Panel de Control - Corte por Hilo")
@@ -535,7 +535,6 @@ with tab4:
             uid = common.authenticate(DB, USER, PASSWORD, {})
             models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
             
-            # FILTRO MAGICO: Busca 'CORTE POR HILO' que NO tenga la palabra '[HECHO]'
             domain_lineas_hilo = [
                 ['name', 'ilike', 'CORTE POR HILO'],
                 ['name', 'not ilike', '[HECHO]']
@@ -586,7 +585,6 @@ with tab4:
                     st.dataframe(df_edm, use_container_width=True, hide_index=True)
                     st.markdown("---")
                     
-                    # --- GESTIÓN DEL TRABAJO ---
                     st.markdown("#### 🔧 Gestión de Electroerosión")
                     opciones_ord_edm = {f"{o['name']} - Cliente: {o['partner_id'][1]}": o['id'] for o in ordenes_edm}
                     
@@ -598,7 +596,6 @@ with tab4:
                         
                         col_horas, col_hecho = st.columns([2, 1])
                         
-                        # COLUMNA IZQUIERDA: CARGA DE HORAS
                         with col_horas:
                             st.markdown("##### ⏱️ Registrar Horas Parciales")
                             with st.form("form_horas_edm", clear_on_submit=True):
@@ -642,12 +639,11 @@ with tab4:
                                             models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [{'order_id': orden_id_edm, 'display_type': 'line_note', 'name': texto_registro}])
                                             st.success("✅ ¡Horas anexadas como nota a la orden!")
 
-                        # COLUMNA DERECHA: BOTÓN HECHO
                         with col_hecho:
                             st.markdown("##### ✅ Finalizar Trabajo")
                             st.info("Al marcarlo como terminado, dejará de listarse en este tablero para evitar confusiones.")
                             
-                            if st.button("Marcar Servicio como HECHO", use_container_width=True):
+                            if st.button("Marcar Servicio como HECHO", use_container_width=True, key="btn_hecho_edm"):
                                 with st.spinner("Actualizando estado en Odoo..."):
                                     linea_hilo = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', 
                                                 [[['order_id', '=', orden_id_edm], ['name', 'ilike', 'CORTE POR HILO'], ['name', 'not ilike', '[HECHO]']]], 
@@ -655,7 +651,6 @@ with tab4:
                                     
                                     if linea_hilo:
                                         l_id = linea_hilo[0]['id']
-                                        # Le agregamos la etiqueta mágica al final de la descripción
                                         nuevo_nombre = linea_hilo[0]['name'] + "\n=== [HECHO] ==="
                                         models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'write', [[l_id], {'name': nuevo_nombre}])
                                         st.success("✅ ¡Trabajo Finalizado! Limpiando tablero...")
@@ -667,6 +662,153 @@ with tab4:
                     st.success("✅ Al día. No hay órdenes activas de corte por hilo pendientes en este momento.")
             else:
                 st.success("✅ Al día. No hay órdenes activas de corte por hilo pendientes en este momento.")
+                
+        except Exception as e:
+            st.error(f"Error de conexión: {e}")
+
+# ------------------------------------------
+# MÓDULO 5: TABLERO DE CORTE LÁSER CNC (NUEVO)
+# ------------------------------------------
+with tab5:
+    st.markdown("### 💥 Panel de Control - Corte Láser CNC")
+    st.write("Trabajos activos que requieren servicio de corte láser y NO están marcados como hechos.")
+    
+    if st.button("🔄 Actualizar Tablero", key="btn_refresh_laser"):
+        st.rerun()
+        
+    with st.spinner("Buscando trabajos pendientes en Odoo..."):
+        try:
+            common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
+            uid = common.authenticate(DB, USER, PASSWORD, {})
+            models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+            
+            domain_lineas_laser = [
+                ['name', 'ilike', 'CORTE LASER CNC'],
+                ['name', 'not ilike', '[HECHO]']
+            ]
+            
+            lineas_laser = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', 
+                                           [domain_lineas_laser], 
+                                           {'fields': ['order_id']})
+            
+            order_ids_laser = list(set([l['order_id'][0] for l in lineas_laser if l.get('order_id')]))
+            
+            if order_ids_laser:
+                filtros_activos = [['invoice_status', '!=', 'invoiced'], ['locked', '=', False], ['state', '!=', 'cancel']]
+                domain_laser = [['id', 'in', order_ids_laser]] + filtros_activos
+                
+                ordenes_laser = models.execute_kw(DB, uid, PASSWORD, 'sale.order', 'search_read', 
+                                                [domain_laser], 
+                                                {'fields': ['id', 'name', 'partner_id', 'date_order', 'amount_total', 'state'], 'order': 'date_order desc'})
+                
+                if ordenes_laser:
+                    ordenes_ids = [o['id'] for o in ordenes_laser]
+                    lineas_resumen = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', 
+                                                     [[['order_id', 'in', ordenes_ids]]], 
+                                                     {'fields': ['order_id', 'name', 'display_type']})
+                    
+                    dict_detalles = {}
+                    for l in lineas_resumen:
+                        o_id = l['order_id'][0]
+                        if o_id not in dict_detalles: dict_detalles[o_id] = []
+                        if l['display_type'] == 'line_section' and l['name']: dict_detalles[o_id].append(l['name'])
+                        elif not l['display_type'] and l['name']: dict_detalles[o_id].append(l['name'].split('\n')[0]) 
+
+                    datos_tabla_laser = []
+                    for o in ordenes_laser:
+                        estado_texto = "Borrador" if o['state'] in ['draft', 'sent'] else "Orden de Venta"
+                        detalles_lista = dict_detalles.get(o['id'], [])
+                        detalle_texto = " | ".join(detalles_lista) if detalles_lista else "Sin detalle"
+
+                        datos_tabla_laser.append({
+                            "Nro. Orden": o['name'],
+                            "Cliente": o['partner_id'][1] if o['partner_id'] else "Sin cliente",
+                            "Detalle": detalle_texto,
+                            "Fecha": str(o.get('date_order', ''))[:10],
+                            "Estado": estado_texto
+                        })
+                    
+                    df_laser = pd.DataFrame(datos_tabla_laser)
+                    st.dataframe(df_laser, use_container_width=True, hide_index=True)
+                    st.markdown("---")
+                    
+                    st.markdown("#### 🔧 Gestión de Corte Láser CNC")
+                    opciones_ord_laser = {f"{o['name']} - Cliente: {o['partner_id'][1]}": o['id'] for o in ordenes_laser}
+                    
+                    with st.container(border=True):
+                        orden_seleccionada_laser = st.selectbox("Seleccione la orden a gestionar:", list(opciones_ord_laser.keys()), key="sel_ord_laser")
+                        orden_id_laser = opciones_ord_laser[orden_seleccionada_laser]
+                        
+                        st.markdown("---")
+                        
+                        col_horas, col_hecho = st.columns([2, 1])
+                        
+                        with col_horas:
+                            st.markdown("##### ⏱️ Registrar Horas Parciales")
+                            with st.form("form_horas_laser", clear_on_submit=True):
+                                tec_laser = st.selectbox("Operario", opciones_empleados, key="tec_laser")
+                                colA_laser, colB_laser = st.columns(2)
+                                with colA_laser: dia_trabajo_laser = st.date_input("Día", value=date.today(), key="dia_laser")
+                                with colB_laser: horas_trabajadas_laser = st.number_input("Tiempo (Hs)", min_value=0.0, step=0.25, value=1.0, key="num_horas_laser")
+                                notas_extra_laser = st.text_area("Descripción / Notas", key="notas_laser")
+                                
+                                submit_horas_laser = st.form_submit_button("💾 Imputar Horas", type="primary")
+                                
+                                if submit_horas_laser:
+                                    if tec_laser == "Seleccionar...": st.error("⚠️ Seleccione al operario.")
+                                    elif horas_trabajadas_laser <= 0: st.error("⚠️ El tiempo debe ser mayor a 0.")
+                                    else:
+                                        try:
+                                            linea_laser = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', 
+                                                [[['order_id', '=', orden_id_laser], ['name', 'ilike', 'CORTE LASER CNC'], ['name', 'not ilike', '[HECHO]']]], 
+                                                {'fields': ['id', 'project_id', 'task_id'], 'limit': 1})
+                                            
+                                            if linea_laser:
+                                                l_id = linea_laser[0]['id']
+                                                empleado_id = dict_empleados[tec_laser]
+                                                desc_ts = f"LÁSER: {notas_extra_laser}" if notas_extra_laser else "Trabajo de Corte Láser"
+                                                
+                                                ts_vals = {
+                                                    'name': desc_ts, 'employee_id': empleado_id, 'unit_amount': horas_trabajadas_laser,
+                                                    'so_line': l_id, 'date': dia_trabajo_laser.strftime("%Y-%m-%d")
+                                                }
+                                                
+                                                if linea_laser[0].get('project_id'): ts_vals['project_id'] = linea_laser[0]['project_id'][0]
+                                                if linea_laser[0].get('task_id'): ts_vals['task_id'] = linea_laser[0]['task_id'][0]
+                                                    
+                                                models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'create', [ts_vals])
+                                                st.success("✅ ¡Horas imputadas en Odoo!")
+                                            else:
+                                                st.warning("⚠️ No se encontró la línea del servicio.")
+                                        except Exception as e:
+                                            texto_registro = f"⏱️ HORAS LÁSER ({tec_laser}): {horas_trabajadas_laser} hs | Fecha: {dia_trabajo_laser.strftime('%d/%m/%Y')}"
+                                            if notas_extra_laser: texto_registro += f"\n📝 Notas: {notas_extra_laser}"
+                                            models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'create', [{'order_id': orden_id_laser, 'display_type': 'line_note', 'name': texto_registro}])
+                                            st.success("✅ ¡Horas anexadas como nota a la orden!")
+
+                        with col_hecho:
+                            st.markdown("##### ✅ Finalizar Trabajo")
+                            st.info("Al marcarlo como terminado, dejará de listarse en este tablero para evitar confusiones.")
+                            
+                            if st.button("Marcar Servicio como HECHO", use_container_width=True, key="btn_hecho_laser"):
+                                with st.spinner("Actualizando estado en Odoo..."):
+                                    linea_laser = models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'search_read', 
+                                                [[['order_id', '=', orden_id_laser], ['name', 'ilike', 'CORTE LASER CNC'], ['name', 'not ilike', '[HECHO]']]], 
+                                                {'fields': ['id', 'name'], 'limit': 1})
+                                    
+                                    if linea_laser:
+                                        l_id = linea_laser[0]['id']
+                                        nuevo_nombre = linea_laser[0]['name'] + "\n=== [HECHO] ==="
+                                        models.execute_kw(DB, uid, PASSWORD, 'sale.order.line', 'write', [[l_id], {'name': nuevo_nombre}])
+                                        st.success("✅ ¡Trabajo Finalizado! Limpiando tablero...")
+                                        st.rerun()
+                                    else:
+                                        st.warning("⚠️ El servicio ya fue marcado como hecho o no se encuentra.")
+                                        
+                else:
+                    st.success("✅ Al día. No hay órdenes activas de corte láser pendientes en este momento.")
+            else:
+                st.success("✅ Al día. No hay órdenes activas de corte láser pendientes en este momento.")
                 
         except Exception as e:
             st.error(f"Error de conexión: {e}")
